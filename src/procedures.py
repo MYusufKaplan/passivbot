@@ -1041,12 +1041,12 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
     # Map of exchange -> quote currency
     exchange_map = {
-        "okx": "USDT",
-        "binanceusdm": "USDT",
-        "bybit": "USDT",
+        #"okx": "USDT",
+        #"binanceusdm": "USDT",
+        #"bybit": "USDT",
         "gateio": "USDT",
-        "bitget": "USDT",
-        "hyperliquid": "USDC",
+        #"bitget": "USDT",
+        #"hyperliquid": "USDC",
     }
 
     # Initialize ccxt clients for each exchange

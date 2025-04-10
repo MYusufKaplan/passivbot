@@ -353,3 +353,8 @@ live_configs/*
 configs/live/multigrid.json
 # Reports
 reports/*
+
+.vscode
+caches
+optimize_results*
+*.pkl

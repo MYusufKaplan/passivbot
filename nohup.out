@@ -1,0 +1,73 @@
+nohup: ignoring input
+2025-04-07T14:11:34 INFO     loading config configs/optimize.json
+2025-04-07T14:11:34 INFO     combined Attempting to load hlcvs data from cache caches/hlcvs_data/ec825c62eebc6c32/hlcvs.npy.gz...
+2025-04-07T14:11:37 INFO     combined Attempting to load BTC/USD prices from cache caches/hlcvs_data/ec825c62eebc6c32/btc_usd_prices.npy.gz...
+2025-04-07T14:11:37 INFO     Seconds to load cache: 3.0732
+2025-04-07T14:11:37 INFO     Successfully loaded hlcvs data from cache
+2025-04-07T14:11:37 INFO     chose gateio for ADA,BCH,BNB,BTC,DOGE,EOS,ETH,FLOKI,SHIB,SOL,TRX
+2025-04-07T14:11:37 INFO     Disk space - Total: 466.95 GB, Used: 436.80 GB, Free: 6.36 GB
+2025-04-07T14:11:37 INFO     Starting to create shared memory file for combined...
+2025-04-07T14:11:37 INFO     Creating shared memory file: /tmp/tmp8px251xg...
+Rust extension is up to date.
+Writing to shared memory:   0%|          | 0.00/418M [00:00<?, ?B/s]Writing to shared memory:  35%|███▌      | 148M/418M [00:00<00:00, 1.47GB/s]Writing to shared memory:  71%|███████   | 297M/418M [00:00<00:00, 1.48GB/s]Writing to shared memory: 100%|██████████| 418M/418M [00:00<00:00, 1.45GB/s]
+2025-04-07T14:11:38 INFO     Done creating shared memory file
+2025-04-07T14:11:38 INFO     Creating shared memory file: /tmp/tmph5gdtjh3...
+Writing to shared memory:   0%|          | 0.00/9.50M [00:00<?, ?B/s]Writing to shared memory: 100%|██████████| 9.50M/9.50M [00:00<00:00, 1.31GB/s]
+2025-04-07T14:11:38 INFO     Done creating shared memory file
+2025-04-07T14:11:38 INFO     Finished creating shared memory file for combined: /tmp/tmp8px251xg
+2025-04-07T14:11:38 INFO     Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False
+2025-04-07T14:11:38 INFO     Creating shared memory file: /tmp/tmp5xxy33so...
+Writing to shared memory:   0%|          | 0.00/9.50M [00:00<?, ?B/s]Writing to shared memory: 100%|██████████| 9.50M/9.50M [00:00<00:00, 1.18GB/s]
+2025-04-07T14:11:38 INFO     Done creating shared memory file
+2025-04-07T14:11:38 INFO     Initializing Evaluator...
+2025-04-07T14:11:38 INFO     Setting up managed_mmap for combined...
+2025-04-07T14:11:38 INFO     mmap_context entered successfully for combined.
+2025-04-07T14:11:38 INFO     Evaluator initialization complete.
+2025-04-07T14:11:38 INFO     Finished initializing evaluator...
+2025-04-07T14:11:38 INFO     Initializing multiprocessing pool. N cpus: 10
+2025-04-07T14:11:38 INFO     Finished initializing multiprocessing pool.
+2025-04-07T14:11:38 INFO     Creating initial population...
+2025-04-07T14:11:38 INFO     Initial population size: 20
+2025-04-07T14:11:38 INFO     Starting optimize...
+Process Process-2:
+Traceback (most recent call last):
+  File "/home/myusuf/miniconda3/installation/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/myusuf/miniconda3/installation/lib/python3.12/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/myusuf/Projects/passivbot/src/optimize.py", line 78, in results_writer_process
+    data = queue.get()
+           ^^^^^^^^^^^
+  File "<string>", line 2, in get
+  File "/home/myusuf/miniconda3/installation/lib/python3.12/multiprocessing/managers.py", line 828, in _callmethod
+    kind, result = conn.recv()
+                   ^^^^^^^^^^^
+  File "/home/myusuf/miniconda3/installation/lib/python3.12/multiprocessing/connection.py", line 250, in recv
+    buf = self._recv_bytes()
+          ^^^^^^^^^^^^^^^^^^
+  File "/home/myusuf/miniconda3/installation/lib/python3.12/multiprocessing/connection.py", line 430, in _recv_bytes
+    buf = self._recv(4)
+          ^^^^^^^^^^^^^
+  File "/home/myusuf/miniconda3/installation/lib/python3.12/multiprocessing/connection.py", line 395, in _recv
+    chunk = read(handle, remaining)
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/myusuf/miniconda3/installation/lib/python3.12/asyncio/runners.py", line 157, in _on_sigint
+    raise KeyboardInterrupt()
+KeyboardInterrupt
+2025-04-07T14:16:37 INFO     Closing and terminating the process pool...
+2025-04-07T14:16:37 INFO     Removing shared memory file: /tmp/tmp8px251xg
+2025-04-07T14:16:37 INFO     Removing BTC/USD shared memory file: /tmp/tmp5xxy33so
+2025-04-07T14:16:37 INFO     Cleanup complete. Exiting.
+gen	nevals	avg                            	std                            	min                              	max                            
+0  	20    	[3.36595629e+09 3.36595629e+09]	[7.64218916e+09 7.64218916e+09]	[210326.84584337 210326.84387431]	[3.08653507e+10 3.08653507e+10]
+1  	16    	[2.74465075e+08 2.74465075e+08]	[2.8272327e+08 2.8272327e+08]  	[210326.84584337 210326.84387431]	[7.83498706e+08 7.83498706e+08]
+2  	14    	[35462776.75216644 35462776.74958906]	[60609834.2307852  60609834.23027639]	[180725.29182345 180725.28937233]	[1.95331224e+08 1.95331224e+08]
+3  	19    	[330341.36733405 330341.3641233 ]    	[128297.83213518 128297.83183434]    	[180417.42903749 180417.42638248]	[529428.66455228 529428.66186571]
+4  	19    	[236222.93016309 236222.92669679]    	[85629.82153619 85629.82045856]      	[109449.98269061 109449.98107457]	[423991.66649967 423991.66090539]
+5  	19    	[197981.85819819 197981.85597682]    	[25487.42956959 25487.42970332]      	[109449.98269061 109449.98107457]	[210498.33314187 210498.32977406]
+6  	17    	[190970.90711882 190970.90453997]    	[27768.89338753 27768.89386494]      	[109449.98269061 109449.98107457]	[210321.62606716 210321.62405788]
+7  	17    	[177726.9069314 177726.9038807]      	[33185.98099109 33185.9811286 ]      	[109449.98269061 109449.98107457]	[210224.80880519 210224.80699412]
+8  	18    	[150690.57774297 150690.57429013]    	[32724.70492793 32724.70486356]      	[49438.69099962 49438.68829221]  	[180725.29182345 180725.28937233]
+9  	16    	[128149.2559104  128149.25184745]    	[36635.11679446 36635.11601391]      	[49438.69099962 49438.68829221]  	[157158.33320995 157158.32756229]
+10 	19    	[102132.9462266  102132.94284942]    	[38501.95201509 38501.9520097 ]      	[34418.15781346 34418.15433403]  	[151754.66972381 151754.66598168]
+11 	19    	[77339.17419198 77339.17097873]      	[31721.91488616 31721.91514991]      	[34418.15781346 34418.15433403]  	[123211.27450173 123211.27096025]

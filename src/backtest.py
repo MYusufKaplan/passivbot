@@ -447,7 +447,7 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
     await add_all_eligible_coins_to_config(config)
-    config["disable_plotting"] = args.disable_plotting
+    config["disable_plotting"] = True
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
     if config["backtest"]["combine_ohlcvs"]:

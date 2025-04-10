@@ -384,6 +384,7 @@ def main(args):
         # Process a single file
         try:
             result = process_single(args.file_location, args.verbose)
+            print(result)
             print(f"successfully processed {args.file_location}")
         except Exception as e:
             print(f"error with {args.file_location} {e}")

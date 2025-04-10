@@ -312,6 +312,12 @@ class Passivbot:
                 await asyncio.sleep(
                     max(0.0, self.config["live"]["execution_delay_seconds"] - (utc_ms() - now) / 1000)
                 )
+                with open("/home/ubuntu/passivbot/balance.log", "a") as file:
+                    res = await self.fetch_positions()
+                    if not res or all(x in [None, False] for x in res):
+                        return False
+                    positions_list_new, balance_new = res
+                    file.write(f"Balance is: {balance_new}\n")
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
