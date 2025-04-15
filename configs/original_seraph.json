@@ -18,13 +18,13 @@
             "sterling_ratio": 0.01837669251344428
       },
       "backtest": {
-            "base_dir": "backtests/pbgui/Mani_CC_v5",
+            "base_dir": "backtests/seraph",
             "compress_cache": true,
             "end_date": "now",
             "exchanges": [
                   "gateio"
             ],
-            "start_date": "2023-01-01",
+            "start_date": "2020-01-01",
             "starting_balance": 1000,
             "symbols": {
                   "binance": [
