@@ -29,35 +29,66 @@ spinner() {
   tput cnorm  # Show cursor again
 }
 
-# Prompt for FITNESS interactively if not provided
-if [ -z "$1" ]; then
-  read -rp "$(echo -e "${YELLOW}🏋️ Enter FITNESS label: ${NC}")" FITNESS
-else
-  FITNESS="$1"
-fi
-
 # Set start date (optional argument)
-START_DATE="${2:-2023-01-01}"
+START_DATE="${1:-2023-01-01}"
 
 # Define BASEDIR and fixed SUBDIR
 BASEDIR="/home/myusuf/Projects/passivbot"
 SUBDIR="optimizer"
 
-echo -e "${CYAN}🏋️ Using FITNESS: ${YELLOW}$FITNESS${NC}"
+# Automatically determine next FITNESS ID based on existing config files 🆔
+config_dir="$BASEDIR/configs/optimization"
+last_id=$(find "$config_dir" -type f -name "*.json" | sed 's/.*\///;s/\.json//' | sort | tail -n 1)
+if [ -z "$last_id" ]; then
+  FITNESS="000001"
+else
+  next_id=$((10#$last_id + 1))
+  FITNESS=$(printf "%06d" "$next_id")
+fi
+
+echo -e "${CYAN}🏋️ Assigned FITNESS ID: ${YELLOW}$FITNESS${NC}"
 echo -e "${CYAN}📅 Using start date: ${YELLOW}$START_DATE${NC}"
 
 # Step 1: Find the latest file in optimize_results/
 latest_optimize_result=$(ls -t "$BASEDIR/optimize_results/" | head -n 1)
 echo -e "${CYAN}📄 Latest optimize result: ${YELLOW}$latest_optimize_result${NC}"
 
-# Run extract_best_config.py
+# Create a trimmed optimize result file with the last 5000 lines and add the first line at the top
+trimmed_optimize_result="$BASEDIR/optimize_results/finalists.txt"
+first_line=$(head -n 1 "$BASEDIR/optimize_results/$latest_optimize_result")
+tail -n 5000 "$BASEDIR/optimize_results/$latest_optimize_result" > "$trimmed_optimize_result"
+echo "$first_line" | cat - "$trimmed_optimize_result" > temp && mv temp "$trimmed_optimize_result"
+echo -e "${CYAN}✂️  Created trimmed optimize result: ${YELLOW}$trimmed_optimize_result${NC}"
+
+# Run extract_best_config.py using the trimmed file
 echo -e "${GREEN}⚙️ Running extract_best_config.py...${NC}"
-"$BASEDIR/.venv/bin/python3" "$BASEDIR/src/tools/extract_best_config.py" "$BASEDIR/optimize_results/$latest_optimize_result" &
+"$BASEDIR/.venv/bin/python3" "$BASEDIR/src/tools/extract_best_config.py" "$trimmed_optimize_result" &
 spinner $!
 
 # Step 2: Find the latest .json file in optimize_results_analysis/
 latest_analysis_json=$(ls -t "$BASEDIR/optimize_results_analysis/"*.json | head -n 1)
 echo -e "${CYAN}📝 Latest analysis JSON: ${YELLOW}$latest_analysis_json${NC}"
+
+# Extract relevant values from the latest analysis JSON
+latest_values=$(jq -r '.analyses.combined | .adg, .adg_w, .mdg, .mdg_w, .gain, .loss_profit_ratio, .loss_profit_ratio_w, .position_held_hours_mean, .positions_held_per_day, .sharpe_ratio, .sharpe_ratio_w' "$BASEDIR/optimize_results_analysis/finalists.txt.json")
+
+# Debugging output
+
+# Step 3: Compare with each config file
+for config_file in "$BASEDIR/configs/optimization"/*.json; do
+  config_values=$(jq -r '.analyses.combined | .adg, .adg_w, .mdg, .mdg_w, .gain, .loss_profit_ratio, .loss_profit_ratio_w, .position_held_hours_mean, .positions_held_per_day, .sharpe_ratio, .sharpe_ratio_w' "$config_file")
+  
+  # Debugging output
+
+  # Compare values
+  if [ "$latest_values" == "$config_values" ]; then
+    echo -e "${RED}🚫 Aborting due to duplicate values."
+    exit 1
+  fi
+done
+
+# Step 4: Continue with the rest of the script if no duplicates were found
+echo -e "${GREEN}✅ No duplicate values found. Continuing with the script...${NC}"
 
 # Modify backtest.start_date to $START_DATE using jq
 echo -e "${GREEN}🛠️ Setting backtest start_date to $START_DATE...${NC}"
@@ -65,48 +96,72 @@ tmp_json="${latest_analysis_json}.tmp"
 jq --arg date "$START_DATE" '.backtest.start_date = $date' "$latest_analysis_json" > "$tmp_json" && mv "$tmp_json" "$latest_analysis_json"
 echo -e "${CYAN}✅ backtest start_date updated${NC}"
 
-# Step 3: Run backtest.py (mixed mode)
-# echo -e "${GREEN}🚀 Running backtest.py (Mixed)...${NC}"
-# "$BASEDIR/.venv/bin/python3" "$BASEDIR/src/backtest.py" "$latest_analysis_json" &
-# spinner $!
+# Modify backtest.end_date to now using jq
+echo -e "${GREEN}🛠️ Setting backtest end_date to now...${NC}"
+tmp_json="${latest_analysis_json}.tmp"
+jq --arg date "now" '.backtest.end_date = $date' "$latest_analysis_json" > "$tmp_json" && mv "$tmp_json" "$latest_analysis_json"
+echo -e "${CYAN}✅ backtest end_date updated${NC}"
 
-# # Step 4: Find the latest backtest directory
-# latest_backtest_dir=$(ls -dt "$BASEDIR/backtests/$SUBDIR/combined/"*/ | head -n 1)
-# echo -e "${CYAN}📊 Latest backtest directory: ${YELLOW}$latest_backtest_dir${NC}"
-
-# # Step 5: Copy config.json to configs/FITNESS_mixed.json
-# config_dest="$BASEDIR/configs/${FITNESS}_mixed.json"
-# cp "$latest_backtest_dir/config.json" "$config_dest"
-# echo -e "${GREEN}📦 Copied config to ${YELLOW}$config_dest${NC}"
-
-# # Step 6: Rename backtest dir to FITNESS_mixed
-# mixed_dir="$BASEDIR/backtests/$SUBDIR/combined/${FITNESS}_mixed"
-# mv "$latest_backtest_dir" "$mixed_dir"
-# echo -e "${GREEN}📁 Renamed backtest directory to ${YELLOW}${mixed_dir}${NC}"
-
-# Step 7: Prepare for Long-only backtest
-echo -e "${GREEN}🛠️ Modifying config for Long-only...${NC}"
-jq '.bot.short.n_positions = 0 | .bot.short.total_wallet_exposure_limit = 0' "$latest_analysis_json" > "$tmp_json" && mv "$tmp_json" "$latest_analysis_json"
-echo -e "${CYAN}✅ Config modified for Long-only${NC}"
-
-# Step 8: Run backtest.py (Long)
-echo -e "${GREEN}🚀 Running backtest.py (Long)...${NC}"
+# Step 8: Run backtest.py
+echo -e "${GREEN}🚀 Running backtest.py...${NC}"
 "$BASEDIR/.venv/bin/python3" "$BASEDIR/src/backtest.py" "$latest_analysis_json" &
 spinner $!
 
-# Step 9: Find latest backtest directory (Long)
-latest_backtest_dir=$(ls -dt "$BASEDIR/backtests/$SUBDIR/combined/"*/ | head -n 1)
+# Step 9: Find latest backtest directory
+latest_backtest_dir=$(ls -dt "$BASEDIR/backtests/optimizer/combined/"*/ | head -n 1)
 echo -e "${CYAN}📊 Latest backtest directory: ${YELLOW}$latest_backtest_dir${NC}"
 
 # Step 10: Copy config.json to configs/FITNESS.json
-config_dest="$BASEDIR/configs/${FITNESS}.json"
+config_dest="$config_dir/${FITNESS}.json"
 cp "$latest_backtest_dir/config.json" "$config_dest"
 echo -e "${GREEN}📦 Copied config to ${YELLOW}$config_dest${NC}"
 
 # Step 11: Rename backtest dir to FITNESS
-long_dir="$BASEDIR/backtests/$SUBDIR/combined/${FITNESS}"
+long_dir="$BASEDIR/backtests/optimizer/combined/${FITNESS}"
 mv "$latest_backtest_dir" "$long_dir"
-echo -e "${GREEN}📁 Renamed backtest directory to ${YELLOW}${long_dir}${NC}"
+echo -e "${GREEN}📁 Renamed backtest directory to ${YELLOW}$long_dir${NC}"
+
+echo -e "${GREEN}📝 Updating CSV files with datetime column...${NC}"
+
+"$BASEDIR/.venv/bin/python3" - <<EOF
+import pandas as pd
+from datetime import datetime, timedelta
+import json
+
+long_dir = "$long_dir"
+
+# Load start_time from config.json
+with open(f"{long_dir}/config.json") as f:
+    start_time_str = json.load(f)["backtest"]["start_date"]
+
+start_time = datetime.fromisoformat(start_time_str)
+
+def process_balance_and_equity(file_path):
+    df = pd.read_csv(file_path)
+    minutes_col = df.columns[0]  # first unnamed column
+    df['datetime'] = df[minutes_col].apply(lambda x: start_time + timedelta(minutes=x))
+    # Move 'datetime' to the first column
+    cols = ['datetime'] + df.columns[:-1].tolist()
+    df = df[cols]
+    df.to_csv(file_path, index=False)
+
+def process_fills(file_path):
+    df = pd.read_csv(file_path)
+    if 'minute' in df.columns:
+        df['datetime'] = df['minute'].apply(lambda x: start_time + timedelta(minutes=x))
+        # Move 'datetime' to the first column
+        cols = ['datetime'] + [col for col in df.columns if col != 'datetime']
+        df = df[cols]
+        df.to_csv(file_path, index=False)
+
+process_balance_and_equity(f"{long_dir}/balance_and_equity.csv")
+process_fills(f"{long_dir}/fills.csv")
+
+print("✅ CSV files updated successfully.")
+
+EOF
+
+echo -e "${GREEN}📊 CSV datetime columns added.${NC}"
+
 
 echo -e "${GREEN}🎉 All done!${NC}"
-

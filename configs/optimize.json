@@ -264,7 +264,7 @@
 		},
 		"combine_ohlcvs": true,
 		"compress_cache": true,
-		"end_date": "2025-04-12",
+		"end_date": "now",
 		"exchanges": [
 			"gateio"
 		],

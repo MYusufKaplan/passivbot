@@ -13,19 +13,15 @@ def plot_balance_equity(csv_file):
     colorful_log("Reading CSV file...", "📖")
     df = pd.read_csv(csv_file)
 
-    # Rename the unnamed column to 'minutes'
-    df.rename(columns={df.columns[0]: 'minutes'}, inplace=True)
+    df.rename(columns={df.columns[1]: 'minutes'}, inplace=True)
 
-    # Convert 'minutes' to datetime starting from 2020-01-01 00:00 UTC
-    start_time = datetime(2020, 1, 1)
+    start_time = datetime(2023, 1, 1)
     df['datetime'] = df['minutes'].apply(lambda x: start_time + timedelta(minutes=x))
 
     colorful_log("Preparing the plots...", "🖌️")
 
-    # Set up the plot
     fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
 
-    # Linear scale plot
     axes[0].plot(df['datetime'], df['balance'], label='Balance', color='blue')
     axes[0].plot(df['datetime'], df['equity'], label='Equity', color='green')
     axes[0].set_ylabel("Value")
@@ -33,16 +29,20 @@ def plot_balance_equity(csv_file):
     axes[0].legend()
     axes[0].grid(True)
 
-    # Logarithmic scale plot
     axes[1].plot(df['datetime'], df['balance'], label='Balance', color='blue')
     axes[1].plot(df['datetime'], df['equity'], label='Equity', color='green')
     axes[1].set_yscale("log")
     axes[1].set_ylabel("Value (Log Scale)")
     axes[1].set_title("Balance & Equity (Logarithmic Scale)")
+
+    # Draw straight line from (x0, y0) to (xn, yn)
+    x0, y0 = df['datetime'].iloc[0], df['balance'].iloc[0]
+    xn, yn = df['datetime'].iloc[-1], df['balance'].iloc[-1]
+    axes[1].plot([x0, xn], [y0, yn], color='red', linestyle='--', linewidth=1, label='Trend Line')
+
     axes[1].legend()
     axes[1].grid(True, which="both", ls="--")
 
-    # Format date axis
     axes[1].xaxis.set_major_locator(mdates.AutoDateLocator())
     axes[1].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
 
@@ -50,6 +50,7 @@ def plot_balance_equity(csv_file):
     plt.tight_layout()
     colorful_log("Displaying the plots!", "📊")
     plt.show()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Balance and Equity from a CSV file.")

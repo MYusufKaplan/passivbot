@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 from rich.console import Console
 from rich.table import Table
 
@@ -33,8 +34,10 @@ for root, dirs, files in os.walk(base_path):
 
         raw_name = os.path.basename(root).replace("_long", "")
         try:
-            if name < 1:
+            if float(raw_name) < 1:
                 name = int(float(raw_name) * 1e8)
+            else:
+                name = int(raw_name)
         except ValueError:
             name = raw_name
 
@@ -134,3 +137,29 @@ top3_rows = [row for row in rows if row[0] in top3_names]
 top3_table = build_colored_table(top3_rows, "🌟 Top 3 Strategies")
 
 console.print(top3_table)
+
+# ✅ Delete directories with 0 score
+for name, points in sorted_total_points:
+    if points == 0:
+        dir_name = str(name).replace("e+08", "")  # handle scientific notation case if needed
+        target_dir = None
+
+        for root, dirs, files in os.walk(base_path):
+            for d in dirs:
+                raw_name = d.replace("_long", "")
+                try:
+                    dir_number = int(float(raw_name) * 1e8) if float(raw_name) < 1 else int(raw_name)
+                except ValueError:
+                    dir_number = raw_name
+
+                if dir_number == name:
+                    target_dir = os.path.join(root, d)
+                    break
+            if target_dir:
+                break
+
+        if target_dir and os.path.exists(target_dir):
+            shutil.rmtree(target_dir)
+            console.print(f"🗑️ [bold green]Deleted:[/] {target_dir}")
+        else:
+            console.print(f"❌ [bold red]Directory not found for:[/] {name}")
