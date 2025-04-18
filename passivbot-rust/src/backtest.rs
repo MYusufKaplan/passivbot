@@ -1879,6 +1879,30 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         0.0
     };
 
+    let n = equities.len() as f64;
+    let mean_x = (n - 1.0) / 2.0; // mean of 0..n-1
+    let log_equities: Vec<f64> = equities.iter().map(|&e| e.ln()).collect();
+    let mean_y = log_equities.iter().sum::<f64>() / n;
+
+    let mut numerator = 0.0;
+    let mut denominator_x = 0.0;
+    let mut denominator_y = 0.0;
+
+    for (i, &y) in log_equities.iter().enumerate() {
+        let x = i as f64;
+        numerator += (x - mean_x) * (y - mean_y);
+        denominator_x += (x - mean_x).powi(2);
+        denominator_y += (y - mean_y).powi(2);
+    }
+
+    let rsquared = if denominator_x != 0.0 && denominator_y != 0.0 {
+        let r = numerator / (denominator_x.sqrt() * denominator_y.sqrt());
+        r * r
+    } else {
+        0.0
+    };
+
+
     let mut analysis = Analysis::default();
     analysis.adg = adg;
     analysis.mdg = mdg;
@@ -1901,6 +1925,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.position_held_hours_max = position_held_hours_max;
     analysis.position_held_hours_median = position_held_hours_median;
     analysis.position_unchanged_hours_max = position_unchanged_hours_max;
+    analysis.rsquared = rsquared;
 
     analysis
 }

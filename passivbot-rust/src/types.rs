@@ -271,6 +271,8 @@ pub struct Analysis {
     pub calmar_ratio_w: f64,
     pub sterling_ratio_w: f64,
     pub loss_profit_ratio_w: f64,
+
+    pub rsquared: f64,
 }
 
 impl Default for Analysis {
@@ -306,6 +308,7 @@ impl Default for Analysis {
             calmar_ratio_w: 0.0,
             sterling_ratio_w: 0.0,
             loss_profit_ratio_w: 1.0,
+            rsquared: 0.0
         }
     }
 }
