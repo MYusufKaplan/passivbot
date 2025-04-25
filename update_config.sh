@@ -6,7 +6,9 @@ success() { echo -e "\033[1;32m[SUCCESS]\033[0m $1"; }
 error() { echo -e "\033[1;31m[ERROR]\033[0m $1"; }
 
 # 1️⃣ Ask for config name (like 499778)
-read -p "Enter the config file name (e.g. 000001): " CONFIG_NAME
+read -p "Enter the config file name (e.g. 000001): " CONFIG_NAME_RAW
+CONFIG_NAME=$(printf "%06d" "$CONFIG_NAME_RAW")
+
 
 # Construct local and remote paths
 LOCAL_FILE="configs/optimization/${CONFIG_NAME}.json"

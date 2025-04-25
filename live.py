@@ -10,8 +10,10 @@ import shutil
 console = Console()
 
 # Configurable point scheme
-elite_points_per_rank = {1: 20, 2: 12, 3: 8, 4: 4}
-primary_points_per_rank = {1: 10, 2: 6, 3: 4, 4: 2}
+# elite_points_per_rank = {1: 20, 2: 12, 3: 8, 4: 4}
+elite_points_per_rank = {1: 5, 2: 3, 3: 2, 4: 1}
+primary_points_per_rank = {1: 5, 2: 3, 3: 2, 4: 1}
+# primary_points_per_rank = {1: 10, 2: 6, 3: 4, 4: 2}
 secondary_points_per_rank = {1: 5, 2: 3, 3: 2, 4: 1}
 
 # Define elite metrics
@@ -79,7 +81,7 @@ def get_current_running_config():
 current_config = get_current_running_config()
 
 # Read JSON files
-base_path = "backtests/optimizer/combined"
+base_path = "backtests/optimizer/live"
 rows = []
 column_stats = {}
 
@@ -114,8 +116,11 @@ rows.sort(key=lambda x: x["name"])
 col_minmax = {}
 for key, values in column_stats.items():
     vals = [v[1] for v in values]
-    col_minmax[key] = (min(vals), max(vals))
-
+    try:
+        col_minmax[key] = (min(vals), max(vals))
+    except Exception as e:
+        col_minmax[key] = (min(vals), max(vals))
+        print(e)
 # Function for color interpolation
 def interpolate_color(val, min_val, max_val, reverse=False):
     if max_val == min_val:

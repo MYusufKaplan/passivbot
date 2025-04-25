@@ -13,7 +13,7 @@ parser.add_argument("--dry-run", action="store_true", help="Preview what would b
 args = parser.parse_args()
 
 # Base path for backtest results
-base_path = "backtests/optimizer/combined"
+base_path = "backtests/optimizer/live"
 
 # Prompt user for minimum gain threshold
 min_gain = Prompt.ask("[bold green]Enter minimum acceptable gain[/] (as a percentage)", default="90")

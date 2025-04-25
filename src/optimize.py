@@ -395,40 +395,95 @@ class Evaluator:
                     raise
         return analyses_combined
 
-    def calc_fitness(self, analyses_combined):
+    def calc_fitness(self, analyses_combined,verbose=True):
         modifier = 0.0
         keys = sorted(self.config["optimize"]["limits"])
-        i = len(keys) + 1
+        # i = len(keys) + 1
+        i = 5
         prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
+
         for key in keys:
             keym = key.replace("lower_bound_", "") + "_max"
             if keym not in analyses_combined:
                 keym = prefix + keym
-                assert keym in analyses_combined, f"malformed key {keym}"
-            modifier += (
-                max(self.config["optimize"]["limits"][key], analyses_combined[keym])
-                - self.config["optimize"]["limits"][key]
-            ) * 10**i
-            i -= 1
-        if (
-            analyses_combined[f"{prefix}drawdown_worst_max"] >= 1.0
-            or analyses_combined[f"{prefix}equity_balance_diff_neg_max_max"] >= 1.0
-        ):
+                assert keym in analyses_combined, f"❌ malformed key: {keym}"
+
+            target = self.config["optimize"]["limits"][key]
+            current = analyses_combined[keym]
+            delta = current - target
+
+            if "gain" in keym or "rsquared" in keym or "positions_held_per_day" in keym or "mdg" in keym or "sharpe" in keym or "calmar" in keym or "omega" in keym or "sortino" in keym or "sterling" in keym:
+                expect_higher = True
+            else:
+                expect_higher = False
+
+            if expect_higher:
+                if "gain" in keym:
+                    contribution = (max(target, current) - current) * 10**(i+2) / target
+                elif "rsquare" in keym:
+                    contribution = (max(target, current) - current) * 10**(i+3) / target
+                elif "mdg" in keym:
+                    contribution = (max(target, current) - current) * 10**(i) / target
+                    # contribution = (max(target, current) - current) * 10**(i-1) / target
+                else:
+                    contribution = (max(target, current) - current) * 10**i / target
+            else:
+                if "held_hours" in keym:
+                    contribution = (max(target, current) - target) * 10**(i-1) * target
+                elif "drawdown" in keym or "equity" in keym:
+                    contribution = (max(target, current) - target) * 10**(i+4) * target
+                else:
+                    contribution = (max(target, current) - target) * 10**(i) / target
+
+            modifier += contribution
+
+            if verbose:
+                if delta >= 0 and expect_higher:
+                    status = "✅ above target" 
+                elif delta <= 0 and not expect_higher:
+                    status = "✅ below target" 
+                elif delta < 0 and expect_higher:
+                    status = "❌ below target"
+                elif delta > 0 and not expect_higher:
+                    status = "❌ above target"
+                print(f"🔧 [{keym}] Target: {target:.5f}, Current: {current:.5f}, Δ: {delta:+.5f} ({status}), Contribution: {contribution:.5f}, Modifier: {modifier:.5f}")
+
+            # i -= 1
+
+        drawdown = analyses_combined.get(f"{prefix}drawdown_worst_max", 0)
+        equity_diff = analyses_combined.get(f"{prefix}equity_balance_diff_neg_max_max", 0)
+
+        if drawdown >= 1.0 or equity_diff >= 1.0:
+            if verbose:
+                print(f"⚠️ Drawdown or Equity cap hit! Drawdown: {drawdown:.2f}, Equity Diff: {equity_diff:.2f}")
             w_0 = w_1 = modifier
         else:
-            assert (
-                len(self.config["optimize"]["scoring"]) == 2
-            ), f"there needs to be two fitness scoring keys {self.config['optimize']['scoring']}"
+            scoring_keys = self.config["optimize"]["scoring"]
+            assert len(scoring_keys) == 2, f"❌ Expected 2 fitness scoring keys, got {len(scoring_keys)}"
+
             scores = []
-            for sk in self.config["optimize"]["scoring"]:
+            for sk in scoring_keys:
                 skm = f"{sk}_mean"
                 if skm not in analyses_combined:
                     skm = prefix + skm
                     if skm not in analyses_combined:
-                        raise Exception(f"invalid scoring key {sk}")
-                scores.append(modifier - analyses_combined[skm])
+                        raise Exception(f"❌ Invalid scoring key: {sk}")
+
+                score_value = modifier - analyses_combined[skm]
+                scores.append(score_value)
+
+                if verbose:
+                    print(f"🎯 [{skm}] Modifier: {modifier:.5f}, Value: {analyses_combined[skm]:.5f}, Score: {score_value:.5f}")
+
+            if verbose:
+                print(f"🥇 Final Scores: {scores[0]:.5f}, {scores[1]:.5f}")
+
             return scores[0], scores[1]
+
+        if verbose:
+            print(f"🥇 Final Equal Scores (penalized): {w_0:.5f}, {w_1:.5f}")
         return w_0, w_1
+
 
     def __del__(self):
         if hasattr(self, "mmap_contexts"):

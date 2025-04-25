@@ -18,18 +18,21 @@ def calculate_r2(actual, predicted):
 def colorful_log(msg, emoji="✨"):
     print(f"{emoji} {msg}")
 
-def plot_balance_equity(csv_file,run_number):
+def plot_balance_equity(csv_file,run_number,start_time):
     colorful_log("📖 Reading CSV file...")
     df = pd.read_csv(csv_file)
 
-    df.rename(columns={df.columns[1]: 'minutes'}, inplace=True)
+    df.rename(columns={df.columns[0]: 'minutes'}, inplace=True)
 
-    start_time = datetime(2023, 1, 1)
     df['datetime'] = df['minutes'].apply(lambda x: start_time + timedelta(minutes=x))
 
     colorful_log("🖌️ Preparing the plots...")
 
     fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+
+    STARTING_BALANCE = 1000
+    df['balance'] = df['balance'] / STARTING_BALANCE
+    df['equity'] = df['equity'] / STARTING_BALANCE
 
     # Linear scale plot
     axes[0].plot(df['datetime'], df['balance'], label='Balance', color='blue')
@@ -51,29 +54,25 @@ def plot_balance_equity(csv_file,run_number):
     balance_vals = df['balance'].values
     equity_vals = df['equity'].values
 
-    # # Trend line for log values
-    # log_balance = np.log(balance_vals)
-    # log_equity = np.log(equity_vals)
+    # Trend line for log values
+    log_balance = np.log(balance_vals)
+    log_equity = np.log(equity_vals)
 
-    # # Generate straight line between first and last log values
-    # def get_trend_line(y_values, x_values):
-    #     y0, yn = y_values[0], y_values[-1]
-    #     x0, xn = x_values[0], x_values[-1]
-    #     slope = (yn - y0) / (xn - x0)
-    #     return y0 + slope * (x_values - x0)
+    # Generate straight line between first and last log values
+    def get_trend_line(y_values, x_values):
+        y0, yn = y_values[0], y_values[-1]
+        x0, xn = x_values[0], x_values[-1]
+        slope = (yn - y0) / (xn - x0)
+        return y0 + slope * (x_values - x0)
 
-    # balance_trend = get_trend_line(log_balance, x_vals)
-    # equity_trend = get_trend_line(log_equity, x_vals)
+    balance_trend = get_trend_line(log_balance, x_vals)
+    equity_trend = get_trend_line(log_equity, x_vals)
 
-    # # Calculate R² values
-    # r2_balance = calculate_r2(log_balance, balance_trend)
-    # r2_equity = calculate_r2(log_equity, equity_trend)
-
-    # colorful_log(f"📊 R² (Balance): {r2_balance:.6f}")
-    # colorful_log(f"📊 R² (Equity): {r2_equity:.6f}")
+    # Plot log-based trend lines on the linear scale chart
+    axes[0].plot(df['datetime'], np.exp(equity_trend), color='red', linestyle='--', linewidth=1, label='Log Trend')
 
     # Plot trend line for balance on log scale (exponentiate back)
-    # axes[1].plot(df['datetime'], np.exp(balance_trend), color='red', linestyle='--', linewidth=1, label='Trend Line')
+    axes[1].plot(df['datetime'], np.exp(equity_trend), color='red', linestyle='--', linewidth=1, label='Trend Line')
 
     axes[1].legend()
     axes[1].grid(True, which="both", ls="--")
@@ -97,6 +96,7 @@ def plot_balance_equity(csv_file,run_number):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Balance and Equity from a CSV file.")
     parser.add_argument("csv_file_or_number", help="Path to the CSV file or run number (e.g. 48)")
+    parser.add_argument("--start-date", default="2023-01-01", help="Start date in YYYY-MM-DD format (default: 2023-01-01)")
     args = parser.parse_args()
 
     # Check if input is a number, then resolve to path
@@ -104,10 +104,11 @@ if __name__ == "__main__":
     if input_arg.isdigit():
         colorful_log(f"🔍 Interpreting '{input_arg}' as run number...")
         run_number = str(input_arg).zfill(6)
-        csv_file = f"/home/myusuf/Projects/passivbot/backtests/optimizer/combined/{run_number}/balance_and_equity.csv"
+        csv_file = f"/home/myusuf/Projects/passivbot/backtests/optimizer/live/{run_number}/balance_and_equity.csv"
         colorful_log(f"📂 Resolved path: {csv_file}")
     else:
         csv_file = input_arg
+        run_number = "N/A"
         colorful_log(f"📂 Using direct CSV path: {csv_file}")
 
     # Check if file exists before proceeding
@@ -115,4 +116,11 @@ if __name__ == "__main__":
         colorful_log(f"❌ File not found: {csv_file}", emoji="🚨")
         sys.exit(1)
 
-    plot_balance_equity(csv_file,run_number)
+    # Parse start date argument
+    try:
+        start_date = datetime.strptime(args.start_date, "%Y-%m-%d")
+    except ValueError:
+        colorful_log(f"❌ Invalid start date format: {args.start_date}. Use YYYY-MM-DD.", emoji="🚨")
+        sys.exit(1)
+
+    plot_balance_equity(csv_file, run_number, start_date)

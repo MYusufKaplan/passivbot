@@ -163,6 +163,7 @@ def process_single(file_location: str, verbose: bool = False):
 
     # Dictionaries keyed by incremental index: index -> (w0, w1)
     all_objectives = {}
+    all_configs = {}
     filtered_objectives = {}
 
     # Indices of the current Pareto front
@@ -238,6 +239,7 @@ def process_single(file_location: str, verbose: bool = False):
 
         # Update all_objectives and Pareto front
         all_objectives[index] = (w0, w1)
+        all_configs[index] = deepcopy(x)
         old_all_pareto = all_pareto.copy()
         all_pareto = update_pareto_front(
             index, (w0, w1), all_pareto, all_objectives, higher_is_better
@@ -261,104 +263,48 @@ def process_single(file_location: str, verbose: bool = False):
     print_(f"n backtests: {index}")
     print_("Processing...")
 
-    # Decide which Pareto front to pick from
-    if len(filtered_pareto) > 0:
-        candidates_indices = filtered_pareto
-        min_w0, max_w0 = filtered_min_w0, filtered_max_w0
-        min_w1, max_w1 = filtered_min_w1, filtered_max_w1
-        candidates_objectives = filtered_objectives
-    else:
-        candidates_indices = all_pareto
-        min_w0, max_w0 = all_min_w0, all_max_w0
-        min_w1, max_w1 = all_min_w1, all_max_w1
-        candidates_objectives = all_objectives
-
-    if not candidates_indices:
-        print_("No candidates found.")
-        return None
+    minw0 = 99999999999
+    maxw0 = -99999999999
+    minw1 = 99999999999
+    maxw1 = -99999999999
+    for idx in all_objectives:
+        if all_objectives[idx][0] < minw0:
+            minw0 = all_objectives[idx][0]
+        if all_objectives[idx][0] > maxw0:
+            maxw0 = all_objectives[idx][0]
+        if all_objectives[idx][1] < minw1:
+            minw1 = all_objectives[idx][1]
+        if all_objectives[idx][1] > maxw1:
+            maxw1 = all_objectives[idx][1]
 
     # Normalize distances and find the point closest to (0, 0)
-    range_w0 = max_w0 - min_w0 if max_w0 != min_w0 else 1.0
-    range_w1 = max_w1 - min_w1 if max_w1 != min_w1 else 1.0
+    range_w0 = maxw0 - minw0 if maxw0 != minw0 else 1.0
+    range_w1 = maxw1 - minw1 if maxw1 != minw1 else 1.0
 
     distances = []
-    for idx in candidates_indices:
-        w0, w1 = candidates_objectives[idx]
-        norm_w0 = (w0 - min_w0) / range_w0
-        norm_w1 = (w1 - min_w1) / range_w1
+    for idx in all_objectives:
+        w0, w1 = all_objectives[idx]
+        norm_w0 = (w0 - minw0) / range_w0
+        norm_w1 = (w1 - minw1) / range_w1
         dist = calc_dist((norm_w0, norm_w1), (0.0, 0.0))
         distances.append((idx, dist))
 
     # Sort by distance ascending
     distances.sort(key=lambda x: x[1])
-    best_idx = distances[0][0]
+    best10_idx = distances[:1]
 
-    # Retrieve the best entry from index_to_entry
-    best_entry = index_to_entry.get(best_idx)
-    if best_entry is None:
-        print_("Best entry not found.")
-        return None
+    i = 0
+    for idx,dist in best10_idx:
 
-    # Build a list of Pareto entries sorted by distance
-    pareto_entries = [index_to_entry.get(idx[0]) for idx in distances]
-    pareto_entries = [e for e in pareto_entries if e is not None]
-
-    # Create a DataFrame to show relevant 'analyses_combined' columns
-    pdf = pd.DataFrame([x["analyses_combined"] for x in pareto_entries])
-    selected_columns = [x for x in pdf.columns if x.endswith("_mean")]
-    pdf = pdf[selected_columns]
-    pdf.columns = [
-        x[:-5].replace("equity_balance", "eqbal").replace("position", "pos") for x in selected_columns
-    ]
-
-    n_cols = 10
-    print_("n pareto members", len(pdf))
-    # Print the DataFrame in chunks for readability
-    for i in range(0, len(pdf.columns), n_cols):
-        print_(pdf[pdf.columns[i : i + n_cols]])
-        print_()
-
-    # Set the best entry's "n_iters" for clarity
-    best_d = best_entry
-    best_d[analysis_key]["n_iters"] = index
-
-    # If there's a "config" key, flatten it into the main dictionary
-    if "config" in best_d:
-        best_d.update(deepcopy(best_d["config"]))
-        del best_d["config"]
-
-    # Print selected candidate info
-    fjson = config_pretty_str(
-        {
-            "analyses": best_d["analyses"],
-            "backtest": {k: best_d["backtest"][k] for k in best_d["backtest"] if k != "coins"},
-            "bot": best_d["bot"],
-            "optimize": best_d["optimize"],
-        }
-    )
-    print_("selected candidate:")
-    print_(fjson)
-    print_(file_location)
-
-    # Determine output paths
-    full_path = file_location.replace("_all_results.txt", "") + ".json"
-    base_path = os.path.split(full_path)[0]
-    full_path = make_get_filepath(full_path.replace(base_path, base_path + "_analysis/"))
-
-    # Flatten out "config" in each Pareto entry if present
-    for entry in pareto_entries:
-        if "config" in entry:
-            entry.update(deepcopy(entry["config"]))
-            del entry["config"]
-
-    # Write all Pareto entries to a file
-    with open(full_path.replace(".json", "_pareto.txt"), "w") as f:
-        for x in pareto_entries:
-            f.write(json.dumps(x) + "\n")
-
-    # Dump the best config to disk
-    dump_config(format_config(best_d), full_path)
-    return best_d
+        # Determine output paths
+        full_path = file_location.replace(".txt", "") + "_" + str(i) + ".json"
+        base_path = os.path.split(full_path)[0]
+        full_path = make_get_filepath(full_path.replace(base_path, base_path + "_analysis/"))
+        # Dump the best config to disk
+        with open(full_path, "w") as f:
+            json.dump(all_configs[idx], f, indent=2)
+        i += 1
+    return None
 
 
 def main(args):
