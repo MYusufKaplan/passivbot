@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt
 import shutil
+from tabulate import tabulate
 
 console = Console()
 
@@ -193,6 +194,10 @@ for key, values in column_stats.items():
     points_per_rank = elite_points_per_rank if key in elite_metrics else primary_points_per_rank if key in priority_metrics else secondary_points_per_rank
     
     assign_points_based_on_distance_to_first_place(values, points_per_rank, reverse)
+    # total_points_sorted = sorted(total_points.items(), key=lambda x: x[1], reverse=False)
+
+    # # Print as table
+    # print(tabulate(total_points_sorted, headers=["Key", "Value"], tablefmt="fancy_grid"))
 
 # Sort final ranking by total points
 total_points_sorted = sorted(total_points.items(), key=lambda x: x[1], reverse=True)

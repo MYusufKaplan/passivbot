@@ -14,9 +14,17 @@ def load_pickle_file(file_path):
         print(f"❌ An unexpected error occurred: {e}")
 
 # Example usage
-file_path = 'checkpoint.pkl'  # Replace with your actual file path
+file_path = 'evaluator.pkl'  # Replace with your actual file path
 data = load_pickle_file(file_path)
 
 if data:
     print("📦 Data content preview:")
-    print(data)
+    data['btc_usd_shared_memory_files'] = {"combined": '/home/myusuf/Projects/passivbot/btc_usd_tempFile'}
+    # sample = data['population'][0]
+    # data['population']
+    # for idx in range(0,len(data["population"])):
+    #     data['population'].pop()
+    # data['population'].append(sample)
+    with open(file_path, "wb") as f:
+                pickle.dump(data, f)
+    # print(data)

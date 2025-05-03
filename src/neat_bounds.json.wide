@@ -1,0 +1,202 @@
+{
+    "long_close_grid_markup_range": [
+        0,
+        0.12
+    ],
+    "long_close_grid_min_markup": [
+        0.00025,
+        0.12
+    ],
+    "long_close_grid_qty_pct": [
+        0.0125,
+        4
+    ],
+    "long_close_trailing_grid_ratio": [
+        -4,
+        4
+    ],
+    "long_close_trailing_qty_pct": [
+        0.0125,
+        4
+    ],
+    "long_close_trailing_retracement_pct": [
+        0.000025,
+        0.4
+    ],
+    "long_close_trailing_threshold_pct": [
+        -0.04,
+        0.4
+    ],
+    "long_ema_span_0": [
+        5,
+        2880
+    ],
+    "long_ema_span_1": [
+        5,
+        2880
+    ],
+    "long_entry_grid_double_down_factor": [
+        0.025,
+        12
+    ],
+    "long_entry_grid_spacing_pct": [
+        0.00025,
+        0.24
+    ],
+    "long_entry_grid_spacing_weight": [
+        0,
+        40
+    ],
+    "long_entry_initial_ema_dist": [
+        -0.4,
+        0.012
+    ],
+    "long_entry_initial_qty_pct": [
+        0.001,
+        0.08
+    ],
+    "long_entry_trailing_grid_ratio": [
+        -4,
+        4
+    ],
+    "long_entry_trailing_retracement_pct": [
+        0.000025,
+        0.4
+    ],
+    "long_entry_trailing_threshold_pct": [
+        -0.04,
+        0.4
+    ],
+    "long_filter_relative_volume_clip_pct": [
+        0,
+        4
+    ],
+    "long_filter_rolling_window": [
+        2,
+        1440
+    ],
+    "long_n_positions": [
+        1,
+        40
+    ],
+    "long_total_wallet_exposure_limit": [
+        0,
+        20
+    ],
+    "long_unstuck_close_pct": [
+        0.00025,
+        0.4
+    ],
+    "long_unstuck_ema_dist": [
+        -0.4,
+        0.04
+    ],
+    "long_unstuck_loss_allowance_pct": [
+        0.00025,
+        0.2
+    ],
+    "long_unstuck_threshold": [
+        0.1,
+        4
+    ],
+    "short_close_grid_markup_range": [
+        0.03,
+        0.03
+    ],
+    "short_close_grid_min_markup": [
+        0.03,
+        0.03
+    ],
+    "short_close_grid_qty_pct": [
+        1,
+        1
+    ],
+    "short_close_trailing_grid_ratio": [
+        1,
+        1
+    ],
+    "short_close_trailing_qty_pct": [
+        1,
+        1
+    ],
+    "short_close_trailing_retracement_pct": [
+        0.1,
+        0.1
+    ],
+    "short_close_trailing_threshold_pct": [
+        0.1,
+        0.1
+    ],
+    "short_ema_span_0": [
+        10,
+        10
+    ],
+    "short_ema_span_1": [
+        10,
+        10
+    ],
+    "short_entry_grid_double_down_factor": [
+        3,
+        3
+    ],
+    "short_entry_grid_spacing_pct": [
+        0.06,
+        0.06
+    ],
+    "short_entry_grid_spacing_weight": [
+        0,
+        0
+    ],
+    "short_entry_initial_ema_dist": [
+        0.003,
+        0.003
+    ],
+    "short_entry_initial_qty_pct": [
+        0.02,
+        0.02
+    ],
+    "short_entry_trailing_grid_ratio": [
+        1,
+        1
+    ],
+    "short_entry_trailing_retracement_pct": [
+        0.1,
+        0.1
+    ],
+    "short_entry_trailing_threshold_pct": [
+        0.1,
+        0.1
+    ],
+    "short_filter_relative_volume_clip_pct": [
+        1,
+        1
+    ],
+    "short_filter_rolling_window": [
+        10,
+        10
+    ],
+    "short_n_positions": [
+        1,
+        1
+    ],
+    "short_total_wallet_exposure_limit": [
+        0,
+        0
+    ],
+    "short_unstuck_close_pct": [
+        0.1,
+        0.1
+    ],
+    "short_unstuck_ema_dist": [
+        0.01,
+        0.01
+    ],
+    "short_unstuck_loss_allowance_pct": [
+        0.05,
+        0.05
+    ],
+    "short_unstuck_threshold": [
+        0.4,
+        0.4
+    ]
+}

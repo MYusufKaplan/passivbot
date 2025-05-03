@@ -28,11 +28,20 @@ echo "💾 Output will be: $OUTPUT_FILE"
 NEW_BOUNDS=$(jq '{
   optimize: {
     bounds: (
-      .bot.long | to_entries 
-      | map(
-        select(.value|type == "number")
-        | {("long_" + .key): [ .value, (.value + 0.000000000000000001) ]}
-      ) | add
+      (
+        .bot.long | to_entries 
+        | map(
+            select(.value | type == "number")
+            | {("long_" + .key): [ .value, .value ]}
+          )
+      ) + (
+        .bot.short | to_entries 
+        | map(
+            select(.value | type == "number")
+            | {("short_" + .key): [ .value, .value ]}
+          )
+      )
+      | add
     )
   }
 }' "$SOURCE_FILE")

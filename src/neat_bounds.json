@@ -1,0 +1,202 @@
+{
+    "long_close_grid_markup_range": [
+        0.0029136381246273766,
+        0.0029136381246273766
+    ],
+    "long_close_grid_min_markup": [
+        0.009847497027225552,
+        0.009847497027225552
+    ],
+    "long_close_grid_qty_pct": [
+        0.10495383259368088,
+        0.10495383259368088
+    ],
+    "long_close_trailing_grid_ratio": [
+        -0.15399639924645042,
+        -0.15399639924645042
+    ],
+    "long_close_trailing_qty_pct": [
+        0.8053509193404076,
+        0.8053509193404076
+    ],
+    "long_close_trailing_retracement_pct": [
+        0.03382497651944022,
+        0.03382497651944022
+    ],
+    "long_close_trailing_threshold_pct": [
+        0.05120529847569568,
+        0.05120529847569568
+    ],
+    "long_ema_span_0": [
+        511.75388064261386,
+        511.75388064261386
+    ],
+    "long_ema_span_1": [
+        128.23472580518225,
+        128.23472580518225
+    ],
+    "long_entry_grid_double_down_factor": [
+        0.6484418955647434,
+        0.6484418955647434
+    ],
+    "long_entry_grid_spacing_pct": [
+        0.023644423141103717,
+        0.023644423141103717
+    ],
+    "long_entry_grid_spacing_weight": [
+        2.136561375563826,
+        2.136561375563826
+    ],
+    "long_entry_initial_ema_dist": [
+        -0.03505043123811604,
+        -0.03505043123811604
+    ],
+    "long_entry_initial_qty_pct": [
+        0.018610031884551004,
+        0.018610031884551004
+    ],
+    "long_entry_trailing_grid_ratio": [
+        -0.3297181643617767,
+        -0.3297181643617767
+    ],
+    "long_entry_trailing_retracement_pct": [
+        0.025793610794439096,
+        0.025793610794439096
+    ],
+    "long_entry_trailing_threshold_pct": [
+        0.08121218096884393,
+        0.08121218096884393
+    ],
+    "long_filter_relative_volume_clip_pct": [
+        0.6356838784663714,
+        0.6356838784663714
+    ],
+    "long_filter_rolling_window": [
+        147.9933094964745,
+        147.9933094964745
+    ],
+    "long_n_positions": [
+        1.0151088714686376,
+        1.0151088714686376
+    ],
+    "long_total_wallet_exposure_limit": [
+        1.9437222698810295,
+        1.9437222698810295
+    ],
+    "long_unstuck_close_pct": [
+        0.10270330536717287,
+        0.10270330536717287
+    ],
+    "long_unstuck_ema_dist": [
+        0.015336713003530148,
+        0.015336713003530148
+    ],
+    "long_unstuck_loss_allowance_pct": [
+        0.03312506527553138,
+        0.03312506527553138
+    ],
+    "long_unstuck_threshold": [
+        0.2680444953038653,
+        0.2680444953038653
+    ],
+    "short_close_grid_markup_range": [
+        0.03,
+        0.03
+    ],
+    "short_close_grid_min_markup": [
+        0.03,
+        0.03
+    ],
+    "short_close_grid_qty_pct": [
+        1,
+        1
+    ],
+    "short_close_trailing_grid_ratio": [
+        1,
+        1
+    ],
+    "short_close_trailing_qty_pct": [
+        1,
+        1
+    ],
+    "short_close_trailing_retracement_pct": [
+        0.1,
+        0.1
+    ],
+    "short_close_trailing_threshold_pct": [
+        0.1,
+        0.1
+    ],
+    "short_ema_span_0": [
+        10,
+        10
+    ],
+    "short_ema_span_1": [
+        10,
+        10
+    ],
+    "short_entry_grid_double_down_factor": [
+        3,
+        3
+    ],
+    "short_entry_grid_spacing_pct": [
+        0.06,
+        0.06
+    ],
+    "short_entry_grid_spacing_weight": [
+        0,
+        0
+    ],
+    "short_entry_initial_ema_dist": [
+        0.003,
+        0.003
+    ],
+    "short_entry_initial_qty_pct": [
+        0.02,
+        0.02
+    ],
+    "short_entry_trailing_grid_ratio": [
+        1,
+        1
+    ],
+    "short_entry_trailing_retracement_pct": [
+        0.1,
+        0.1
+    ],
+    "short_entry_trailing_threshold_pct": [
+        0.1,
+        0.1
+    ],
+    "short_filter_relative_volume_clip_pct": [
+        1,
+        1
+    ],
+    "short_filter_rolling_window": [
+        10,
+        10
+    ],
+    "short_n_positions": [
+        1,
+        1
+    ],
+    "short_total_wallet_exposure_limit": [
+        0,
+        0
+    ],
+    "short_unstuck_close_pct": [
+        0.1,
+        0.1
+    ],
+    "short_unstuck_ema_dist": [
+        0.01,
+        0.01
+    ],
+    "short_unstuck_loss_allowance_pct": [
+        0.05,
+        0.05
+    ],
+    "short_unstuck_threshold": [
+        0.4,
+        0.4
+    ]
+}

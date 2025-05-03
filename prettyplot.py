@@ -83,12 +83,6 @@ def plot_balance_equity(csv_file,run_number,start_time):
 
     plt.xlabel("Date")
 
-    # Show R² values on the plot
-    # textstr = f"R² (Balance): {r2_balance:.4f}\nR² (Equity): {r2_equity:.4f}"
-    # axes[1].text(0.02, 0.95, textstr, transform=axes[1].transAxes,
-    #              fontsize=12, verticalalignment='top',
-    #              bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="gray", lw=0.5))
-
     plt.tight_layout()
     colorful_log("📊 Displaying the plots!")
     plt.show()

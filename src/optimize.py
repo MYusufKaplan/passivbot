@@ -332,7 +332,7 @@ class Evaluator:
         logging.info("Evaluator initialization complete.")
         self.results_queue = results_queue
 
-    def evaluate(self, individual, overrides_list):
+    def evaluate(self, individual, overrides_list=[]):
         config = individual_to_config(
             individual, optimizer_overrides, overrides_list, template=self.config
         )
@@ -370,7 +370,7 @@ class Evaluator:
         }
         self.results_queue.put(data)
         return w_0, w_1
-
+    
     def combine_analyses(self, analyses):
         analyses_combined = {}
         keys = analyses[next(iter(analyses))].keys()
@@ -395,15 +395,66 @@ class Evaluator:
                     raise
         return analyses_combined
 
+    
+    
     def calc_fitness(self, analyses_combined,verbose=True):
         modifier = 0.0
-        keys = sorted(self.config["optimize"]["limits"])
-        # i = len(keys) + 1
-        i = 5
+        keys = self.config["optimize"]["limits"]
+        i = len(keys) + 1
+        # i = 5
         prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
 
+        # Step 1: Initialize min/max values
+        min_contribution = float('inf')
+        max_contribution = float('-inf')
+        min_modifier = float('inf')
+        max_modifier = float('-inf')
+
+        # Define color codes
+        RESET = "\033[0m"
+        CYAN = "\033[96m"
+        # Define the custom green and red colors
+        GREEN_RGB = (195, 232, 141)
+        RED_RGB = (255, 83, 112)
+
+        # Store the results for each key to later apply colors
+        results = []
+
+        header_aliases = {
+            "adg": "ADG",
+            "adg_w": "ADG(w)",
+            "mdg": "MDG",
+            "mdg_w": "MDG(w)",
+            "gain": "Gain",
+            "positions_held_per_day": "Pos/Day",
+            "sharpe_ratio": "Sharpe",
+            "sharpe_ratio_w": "Sharpe(w)",
+            "drawdown_worst": "DD Worst",
+            "drawdown_worst_mean_1pct": "DD 1%",
+            "expected_shortfall_1pct": "ES 1%",
+            "position_held_hours_mean": "Hrs/Pos",
+            "position_unchanged_hours_max": "Unchg Max",
+            "loss_profit_ratio": "LPR",
+            "loss_profit_ratio_w": "LPR(w)",
+            "calmar_ratio": "Calmar",
+            "calmar_ratio_w": "Calmar(w)",
+            "omega_ratio": "Omega",
+            "omega_ratio_w": "Omega(w)",
+            "sortino_ratio": "Sortino",
+            "sortino_ratio_w": "Sortino(w)",
+            "sterling_ratio": "Sterling",
+            "sterling_ratio_w": "Sterling(w)",
+            "rsquared": "R²",
+            "equity_balance_diff_neg_max": "E/B Diff - max",
+            "equity_balance_diff_neg_mean": "E/B Diff - mean",
+            "equity_balance_diff_pos_max": "E/B Diff + max",
+            "equity_balance_diff_pos_mean": "E/B Diff + mean",
+        }
+
+        # Step 2: Single pass to process and gather data
         for key in keys:
             keym = key.replace("lower_bound_", "") + "_max"
+            myKey = key.replace("lower_bound_", "")
             if keym not in analyses_combined:
                 keym = prefix + keym
                 assert keym in analyses_combined, f"❌ malformed key: {keym}"
@@ -412,54 +463,160 @@ class Evaluator:
             current = analyses_combined[keym]
             delta = current - target
 
+            # Determine if we expect higher or lower values for the current key
             if "gain" in keym or "rsquared" in keym or "positions_held_per_day" in keym or "mdg" in keym or "sharpe" in keym or "calmar" in keym or "omega" in keym or "sortino" in keym or "sterling" in keym:
                 expect_higher = True
             else:
                 expect_higher = False
 
-            if expect_higher:
-                if "gain" in keym:
-                    contribution = (max(target, current) - current) * 10**(i+2) / target
-                elif "rsquare" in keym:
-                    contribution = (max(target, current) - current) * 10**(i+3) / target
-                elif "mdg" in keym:
-                    contribution = (max(target, current) - current) * 10**(i) / target
-                    # contribution = (max(target, current) - current) * 10**(i-1) / target
-                else:
-                    contribution = (max(target, current) - current) * 10**i / target
-            else:
-                if "held_hours" in keym:
-                    contribution = (max(target, current) - target) * 10**(i-1) * target
-                elif "drawdown" in keym or "equity" in keym:
-                    contribution = (max(target, current) - target) * 10**(i+4) * target
-                else:
-                    contribution = (max(target, current) - target) * 10**(i) / target
+            def normalize_delta(delta, current, target, expect_higher, reward_mode=False):
+                eps = 1e-9
 
+                if current < 0:
+                    return 1.0
+
+                if expect_higher:
+                    if delta >= 0:
+                        if reward_mode:
+                            percent_above = delta / max(target, eps)
+                            return -0.9 * min(percent_above, 1.0)# Negative = reward
+                        return 0.0
+                    else:
+                        norm = abs(delta) / max(target, eps)
+                        return 0.9 * min(norm, 1.0) + 0.1
+                else:
+                    if delta <= 0:
+                        if reward_mode:
+                            percent_below = abs(delta) / max(target, eps)
+                            return -0.9 * min(percent_below, 1.0)
+                        return 0.0
+                    else:
+                        norm = delta / max(current, eps)
+                        return 0.9 * min(norm, 1.0) + 0.1
+
+
+
+            # Calculate normalized error based on delta and target
+            weight = normalize_delta(delta,current,target,expect_higher)
+            contribution = (10 ** i) * weight
+
+            i -= 1
             modifier += contribution
 
-            if verbose:
-                if delta >= 0 and expect_higher:
-                    status = "✅ above target" 
-                elif delta <= 0 and not expect_higher:
-                    status = "✅ below target" 
-                elif delta < 0 and expect_higher:
-                    status = "❌ below target"
-                elif delta > 0 and not expect_higher:
-                    status = "❌ above target"
-                print(f"🔧 [{keym}] Target: {target:.5f}, Current: {current:.5f}, Δ: {delta:+.5f} ({status}), Contribution: {contribution:.5f}, Modifier: {modifier:.5f}")
+            # Update min/max for contribution and modifier
+            min_contribution = min(min_contribution, contribution)
+            max_contribution = max(max_contribution, contribution)
+            min_modifier = min(min_modifier, modifier)
+            max_modifier = max(max_modifier, modifier)
 
+            # Store the result (we'll use this data for printing later)
+            results.append({
+                'key': header_aliases[myKey],
+                'target': target,
+                'current': current,
+                'delta': delta,
+                'contribution': contribution,
+                'modifier': modifier,
+                'expect_higher': expect_higher
+            })
+
+        def value_to_color(value, min_value, max_value):
+            eps = 1e-9  # prevent log10(0)
+
+            # Ensure all values are strictly positive for log10
+            value = max(value, eps)
+            min_value = max(min_value, eps)
+            max_value = max(max_value, min_value + eps)
+
+            if max_value == min_value:
+                norm_value = 0.5
+            else:
+                # Log-scale normalization
+                log_min = np.log10(min_value)
+                log_max = np.log10(max_value)
+                log_val = np.log10(value)
+
+                norm_value = (log_val - log_min) / (log_max - log_min)
+                norm_value = np.clip(norm_value, 0, 1)
+
+            # Interpolate between green and red
+            r = int(GREEN_RGB[0] + norm_value * (RED_RGB[0] - GREEN_RGB[0]))
+            g = int(GREEN_RGB[1] + norm_value * (RED_RGB[1] - GREEN_RGB[1]))
+            b = int(GREEN_RGB[2] + norm_value * (RED_RGB[2] - GREEN_RGB[2]))
+
+            return f"\033[38;2;{r};{g};{b}m"
+
+        all_zero_contributions = all(r['contribution'] == 0.0 for r in results)
+
+        i = len(keys) + 1
+
+        # Step 4: Print the results with colorized values
+        for result in results:
+            key = result['key']
+            target = result['target']
+            current = result['current']
+            delta = result['delta']
+            # contribution = result['contribution']
+            # modifier = result['modifier']
+            expect_higher = result['expect_higher']
+
+            if all_zero_contributions:
+                if "gain" in key:
+                    contribution = (10 ** (i - 1)) * normalize_delta(result['delta'], result['current'], result['target'], result['expect_higher'], reward_mode=all_zero_contributions)
+                else:
+                    contribution = (10 ** i) * normalize_delta(result['delta'], result['current'], result['target'], result['expect_higher'], reward_mode=all_zero_contributions)
+                modifier += contribution
+            else:
+                contribution = result['contribution']
+                modifier = result['modifier']
             # i -= 1
+            # Status determination
+            if delta >= 0 and expect_higher:
+                status = "~✅ above target"
+            elif delta <= 0 and not expect_higher:
+                status = "~✅ below target"
+            elif delta < 0 and expect_higher:
+                status = "~❌ below target"
+            elif delta > 0 and not expect_higher:
+                status = "~❌ above target"
+
+            # Decide the color based on status
+            if "✅" in status:
+                status_color = GREEN_RGB
+            elif "❌" in status:
+                status_color = RED_RGB
+            else:
+                status_color = CYAN  # For other cases, like "🔵 neutral" if any
+
+            # Trim or pad the keym to 30 characters
+            keym_display = (key[:12] + '...') if len(key) > 15 else f"{key:<15}"
+
+            # Colorize current, contribution, and modifier
+            current_color = CYAN  # Always cyan for current
+            contribution_color = value_to_color(contribution, min_contribution, max_contribution)
+            modifier_color = value_to_color(modifier, min_modifier, max_modifier)
+
+
+            # Final colorful, aligned print
+            print(f"\033[38;2;{status_color[0]};{status_color[1]};{status_color[2]}m{status:<3}{RESET} "
+                f"[{keym_display}] "
+                f"Target: {target:>10.5f}, "
+                f"Current: {current_color}{current:>10.5f}{RESET}, "
+                f"Δ: {delta:+10.5f}, "
+                f"Contribution: {contribution_color}{contribution:>12.5e}{RESET}, "
+                f"Modifier: {modifier_color}{modifier:>12.5e}{RESET}")
+
 
         drawdown = analyses_combined.get(f"{prefix}drawdown_worst_max", 0)
         equity_diff = analyses_combined.get(f"{prefix}equity_balance_diff_neg_max_max", 0)
 
         if drawdown >= 1.0 or equity_diff >= 1.0:
             if verbose:
-                print(f"⚠️ Drawdown or Equity cap hit! Drawdown: {drawdown:.2f}, Equity Diff: {equity_diff:.2f}")
+                print(f"~⚠️ Drawdown or Equity cap hit! Drawdown: {drawdown:.2f}, Equity Diff: {equity_diff:.2f}")
             w_0 = w_1 = modifier
         else:
             scoring_keys = self.config["optimize"]["scoring"]
-            assert len(scoring_keys) == 2, f"❌ Expected 2 fitness scoring keys, got {len(scoring_keys)}"
+            assert len(scoring_keys) == 2, f"~❌ Expected 2 fitness scoring keys, got {len(scoring_keys)}"
 
             scores = []
             for sk in scoring_keys:
@@ -467,21 +624,22 @@ class Evaluator:
                 if skm not in analyses_combined:
                     skm = prefix + skm
                     if skm not in analyses_combined:
-                        raise Exception(f"❌ Invalid scoring key: {sk}")
+                        raise Exception(f"~❌ Invalid scoring key: {sk}")
 
-                score_value = modifier - analyses_combined[skm]
+                # score_value = modifier - analyses_combined[skm]
+                score_value = modifier
                 scores.append(score_value)
 
                 if verbose:
-                    print(f"🎯 [{skm}] Modifier: {modifier:.5f}, Value: {analyses_combined[skm]:.5f}, Score: {score_value:.5f}")
+                    print(f"~🎯 [{skm}] Modifier: {modifier:.5e}, Value: {analyses_combined[skm]:.5f}, Score: {score_value:.5e}")
 
-            if verbose:
-                print(f"🥇 Final Scores: {scores[0]:.5f}, {scores[1]:.5f}")
+            # if verbose:
+            #     print(f"🥇 Final Scores: {scores[0]:.5f}, {scores[1]:.5f}")
 
             return scores[0], scores[1]
 
         if verbose:
-            print(f"🥇 Final Equal Scores (penalized): {w_0:.5f}, {w_1:.5f}")
+            print(f"~🥇 Final Equal Scores (penalized): {w_0:.5f}, {w_1:.5f}")
         return w_0, w_1
 
 
@@ -578,6 +736,186 @@ def configs_to_individuals(cfgs, param_bounds):
         except Exception as e:
             logging.error(f"error loading starting config: {e}")
     return list(inds.values())
+
+from types import SimpleNamespace
+
+async def initEvaluator(config_path: str = None, **kwargs):
+    manage_rust_compilation()
+
+    # Prepare template config
+    template_config = get_template_live_config("v7")
+    del template_config["bot"]
+    keep_live_keys = {
+        "approved_coins",
+        "minimum_coin_age_days",
+        "ohlcv_rolling_window",
+        "relative_volume_filter_clip_pct",
+    }
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+
+    # Logging setup
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)-8s %(message)s",
+        level=logging.INFO,
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    # Load config
+    if config_path is None:
+        logging.info(f"loading default template config configs/template.json")
+        config = load_config("configs/template.json", verbose=False)
+    else:
+        logging.info(f"loading config {config_path}")
+        config = load_config(config_path, verbose=False)
+
+    old_config = deepcopy(config)
+
+    # Apply overrides via kwargs if provided
+    if kwargs:
+        # Convert kwargs to a SimpleNamespace to simulate argparse.Namespace
+        arg_namespace = SimpleNamespace(**kwargs)
+        update_config_with_args(config, arg_namespace)
+
+    config = format_config(config, verbose=False)
+    await add_all_eligible_coins_to_config(config)
+    # Prepare data for each exchange
+    hlcvs_dict = {}
+    shared_memory_files = {}
+    hlcvs_shapes = {}
+    hlcvs_dtypes = {}
+    msss = {}
+
+    # NEW: Store per-exchange BTC arrays in a dict,
+    # and store their shared-memory file names in another dict.
+    btc_usd_data_dict = {}
+    btc_usd_shared_memory_files = {}
+    btc_usd_dtypes = {}
+
+    config["backtest"]["coins"] = {}
+    if config["backtest"]["combine_ohlcvs"]:
+        exchange = "combined"
+        coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
+            config, exchange
+        )
+        exchange_preference = defaultdict(list)
+        for coin in coins:
+            exchange_preference[mss[coin]["exchange"]].append(coin)
+        for ex in exchange_preference:
+            logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
+        config["backtest"]["coins"][exchange] = coins
+        hlcvs_dict[exchange] = hlcvs
+        hlcvs_shapes[exchange] = hlcvs.shape
+        hlcvs_dtypes[exchange] = hlcvs.dtype
+        msss[exchange] = mss
+        required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
+        check_disk_space(tempfile.gettempdir(), required_space)
+        logging.info(f"Starting to create shared memory file for {exchange}...")
+        validate_array(hlcvs, "hlcvs")
+        shared_memory_file = create_shared_memory_file(hlcvs)
+        shared_memory_files[exchange] = shared_memory_file
+        if config["backtest"].get("use_btc_collateral", False):
+            # Use the fetched array
+            btc_usd_data_dict[exchange] = btc_usd_prices
+        else:
+            # Fall back to all ones
+            btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
+        validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+        btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
+            btc_usd_data_dict[exchange]
+        )
+        btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
+        logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
+    else:
+        tasks = {}
+        for exchange in config["backtest"]["exchanges"]:
+            tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
+        for exchange in config["backtest"]["exchanges"]:
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
+            config["backtest"]["coins"][exchange] = coins
+            hlcvs_dict[exchange] = hlcvs
+            hlcvs_shapes[exchange] = hlcvs.shape
+            hlcvs_dtypes[exchange] = hlcvs.dtype
+            msss[exchange] = mss
+            required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
+            check_disk_space(tempfile.gettempdir(), required_space)
+            logging.info(f"Starting to create shared memory file for {exchange}...")
+            validate_array(hlcvs, "hlcvs")
+            shared_memory_file = create_shared_memory_file(hlcvs)
+            shared_memory_files[exchange] = shared_memory_file
+            # Create the BTC array for this exchange
+            if config["backtest"].get("use_btc_collateral", False):
+                btc_usd_data_dict[exchange] = btc_usd_prices
+            else:
+                btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
+
+            validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+            btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
+                btc_usd_data_dict[exchange]
+            )
+            btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
+            logging.info(
+                f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
+            )
+    exchanges = config["backtest"]["exchanges"]
+    exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
+    date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+    coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
+    coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
+    hash_snippet = uuid4().hex[:8]
+    n_days = int(
+        round(
+            (
+                date_to_ts(config["backtest"]["end_date"])
+                - date_to_ts(config["backtest"]["start_date"])
+            )
+            / (1000 * 60 * 60 * 24)
+        )
+    )
+    config["results_filename"] = make_get_filepath(
+        f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
+    )
+    overrides_list = config.get("optimize", {}).get("enable_overrides", [])
+
+    # Create results queue and start manager process
+    manager = multiprocessing.Manager()
+    results_queue = manager.Queue()
+    writer_process = Process(
+        target=results_writer_process,
+        args=(results_queue, config["results_filename"]),
+        kwargs={"compress": config["optimize"]["compress_results_file"]},
+    )
+    writer_process.start()
+
+    # Prepare BTC/USD data
+    # For optimization, use the BTC/USD prices from the first exchange (or combined)
+    # Since all exchanges should align in timesteps, this should be consistent
+    btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
+    if config["backtest"].get("use_btc_collateral", False):
+        logging.info("Using fetched BTC/USD prices for collateral")
+    else:
+        logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
+        btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
+
+    validate_array(btc_usd_data, "btc_usd_data")
+    btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
+
+    # Initialize evaluator with results queue and BTC/USD shared memory
+    evaluator = Evaluator(
+        shared_memory_files=shared_memory_files,
+        hlcvs_shapes=hlcvs_shapes,
+        hlcvs_dtypes=hlcvs_dtypes,
+        # Instead of a single file/dtype, pass dictionaries
+        btc_usd_shared_memory_files=btc_usd_shared_memory_files,
+        btc_usd_dtypes=btc_usd_dtypes,
+        msss=msss,
+        config=config,
+        results_queue=results_queue,
+    )
+
+    logging.info(f"Finished initializing evaluator...")
+    return evaluator
 
 
 async def main():
