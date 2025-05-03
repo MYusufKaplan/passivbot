@@ -18,6 +18,7 @@ console = Console(force_terminal=True, no_color=False, log_path=False)
 CHECKPOINT_FILE = "cma_checkpoints/cma_state.pkl"
 LOG_PATH = "logs/evaluation_output.log"
 
+
 def load_output_bounds(json_path):
     console.log(f"[bold cyan]📂 Loading output bounds from:[/bold cyan] {json_path}")
     with open(json_path) as f:
@@ -88,6 +89,8 @@ async def run_cma_es(bounds, evaluator):
     console.log(f"🧠 Using [magenta]{multiprocessing.cpu_count()}[/magenta] CPU cores")
     gen_runtimes = []
 
+    best_fitness_so_far = float("inf")
+
     while not es.stop():
         gen_start = time.time()
 
@@ -95,7 +98,6 @@ async def run_cma_es(bounds, evaluator):
         args = [(sol, bounds, evaluator) for sol in solutions]
         fitnesses = []
 
-        # Progress bar inside the main loop
         with Progress(
             TextColumn("🔍 [progress.description]{task.description}"),
             BarColumn(bar_width=None),
@@ -104,16 +106,17 @@ async def run_cma_es(bounds, evaluator):
             TimeElapsedColumn(),
             "•",
             TimeRemainingColumn(),
-            console=console,         # Make sure console = Console(force_terminal=True)
-            transient=False          # Keep progress bar visible in logs
+            console=console,
+            transient=True
         ) as progress:
-            task = progress.add_task(f"Generation {gen + 1}", total=len(args))
+            task = progress.add_task(f"Gen {gen + 1} | Best Fitness: {best_fitness_so_far:.6e}", total=len(args))
 
-            # Use pool.imap_unordered with wrapped_eval to update the progress bar during execution
-            for fitness in pool.imap_unordered(wrapped_eval, args):
+            for fitness in pool.imap_unordered(evaluate_solution, args):
                 fitnesses.append(fitness)
-                progress.update(task, advance=1)  # Update progress bar for each evaluated solution
-
+                best_fitness_so_far = min(best_fitness_so_far, min(fitnesses))
+                
+                # Update progress bar with best fitness after each solution evaluation
+                progress.update(task, advance=1, description=f"Gen {gen + 1} | Best Fitness: {best_fitness_so_far:.6e}")
 
         es.tell(solutions, fitnesses)
         es.logger.add()
