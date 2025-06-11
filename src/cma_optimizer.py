@@ -29,6 +29,30 @@ def load_output_bounds(json_path):
 def map_output(raw_vals, bounds):
     return [min_ + val * (max_ - min_) for val, (min_, max_) in zip(raw_vals, bounds)]
 
+def evaluate_solution(args):
+    sol, bounds, evaluator = args
+    sol_clipped = np.clip(sol, 0, 1)
+    mapped = map_output(sol_clipped, bounds)
+
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+
+    try:
+        with open(LOG_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
+            print("\n" + "=" * 60)  # separator between evaluations
+            raw_fitness = evaluator.evaluate(mapped)[0]
+            scaled_fitness = np.log1p(raw_fitness)  # Compress the fitness range
+            return scaled_fitness
+    except Exception as e:
+        with open(LOG_PATH, "a") as f:
+            f.write(f"\n[Evaluation Error] {e}\n")
+        return float("inf")
+    return fitness
+
+def wrapped_eval(args):
+    sol, bounds, evaluator = args
+    fitness = evaluate_solution((sol, bounds, evaluator))  # Evaluate fitness
+    return fitness
+
 
 def save_checkpoint(es, generation):
     os.makedirs("cma_checkpoints", exist_ok=True)
@@ -41,33 +65,9 @@ def load_checkpoint():
     if os.path.exists(CHECKPOINT_FILE):
         with open(CHECKPOINT_FILE, "rb") as f:
             es, generation = pickle.load(f)
-        console.log(f"🔄 [yellow]Resuming from generation {generation}[/yellow]")
+        console.log(f"🔄 [yellow]Resuming from generation {generation + 1}[/yellow]")
         return es, generation
     return None, 0
-
-def evaluate_solution(args):
-    sol, bounds, evaluator = args
-    sol_clipped = np.clip(sol, 0, 1)
-    mapped = map_output(sol_clipped, bounds)
-
-    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-
-    try:
-        with open(LOG_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
-            print("\n" + "=" * 60)  # separator between evaluations
-            print(f"Evaluating solution: {mapped}")
-            fitness, _ = evaluator.evaluate(mapped)
-    except Exception as e:
-        with open(LOG_PATH, "a") as f:
-            f.write(f"\n[Evaluation Error] {e}\n")
-        return float("inf")
-
-    return fitness
-
-def wrapped_eval(args):
-    sol, bounds, evaluator = args
-    fitness = evaluate_solution((sol, bounds, evaluator))  # Evaluate fitness
-    return fitness
 
 async def run_cma_es(bounds, evaluator):
     console.rule("[bold green]🚀 Starting CMA-ES Optimization")
@@ -89,14 +89,17 @@ async def run_cma_es(bounds, evaluator):
     console.log(f"🧠 Using [magenta]{multiprocessing.cpu_count()}[/magenta] CPU cores")
     gen_runtimes = []
 
-    best_fitness_so_far = float("inf")
+    
 
-    while not es.stop():
+    # while not es.stop():
+    while True:
         gen_start = time.time()
+        console.rule(f"[bold green]📈 Generation {gen + 1}")
 
         solutions = es.ask()
         args = [(sol, bounds, evaluator) for sol in solutions]
         fitnesses = []
+        best_fitness_so_far = float("inf")
 
         with Progress(
             TextColumn("🔍 [progress.description]{task.description}"),
@@ -135,12 +138,12 @@ async def run_cma_es(bounds, evaluator):
         gen_runtimes.append(gen_time)
         avg_gen_time = sum(gen_runtimes) / len(gen_runtimes)
 
-        console.rule(f"[bold green]📈 Generation {gen}")
-        console.print(f"🏆 [cyan]Best fitness:[/cyan] {best_fitness:.6e}")
+        console.print(f"🌍 [cyan]Global Best fitness:[/cyan] {es.result.fbest:.6e}")
+        console.print(f"🎖️ [cyan]Generational Best fitness:[/cyan] {best_fitness:.6e}")
         console.print(f"📊 [cyan]Mean fitness:[/cyan] {mean_fitness:.6e}")
         console.print(f"📉 [cyan]Fitness std dev:[/cyan] {std_fitness:.6e}")
-        console.print(f"⏱️ [magenta]Generation time:[/magenta] {gen_time:.2f} sec")
-        console.print(f"📆 [magenta]Avg gen time:[/magenta] {avg_gen_time:.2f} sec")
+        console.print(f"⏱️ [magenta]Generation time:[/magenta] {gen_time:.2f} sec / {(gen_time/60):.2f} min")
+        console.print(f"📆 [magenta]Avg gen time:[/magenta] {avg_gen_time:.2f} sec / {(avg_gen_time/60):.2f} min")
 
         save_checkpoint(es, gen)
 

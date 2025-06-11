@@ -263,10 +263,10 @@ def process_single(file_location: str, verbose: bool = False):
     print_(f"n backtests: {index}")
     print_("Processing...")
 
-    minw0 = 99999999999
-    maxw0 = -99999999999
-    minw1 = 99999999999
-    maxw1 = -99999999999
+    minw0 = 9 * 10**40
+    maxw0 = -9 * 10**40
+    minw1 = 9 * 10**40
+    maxw1 = -9 * 10**40
     for idx in all_objectives:
         if all_objectives[idx][0] < minw0:
             minw0 = all_objectives[idx][0]
@@ -283,11 +283,12 @@ def process_single(file_location: str, verbose: bool = False):
 
     distances = []
     for idx in all_objectives:
-        w0, w1 = all_objectives[idx]
-        norm_w0 = (w0 - minw0) / range_w0
-        norm_w1 = (w1 - minw1) / range_w1
-        dist = calc_dist((norm_w0, norm_w1), (0.0, 0.0))
-        distances.append((idx, dist))
+        distances.append((idx,all_objectives[idx][0]))
+        # w0, w1 = all_objectives[idx]
+        # norm_w0 = (w0 - minw0) / range_w0
+        # norm_w1 = (w1 - minw1) / range_w1
+        # dist = calc_dist((norm_w0, norm_w1), (0.0, 0.0))
+        # distances.append((idx, dist))
 
     # Sort by distance ascending
     distances.sort(key=lambda x: x[1])

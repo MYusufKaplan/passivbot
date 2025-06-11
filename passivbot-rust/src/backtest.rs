@@ -1601,6 +1601,14 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
     // Calculate ADG and standard metrics
     let adg = daily_eqs_pct_change.iter().sum::<f64>() / daily_eqs_pct_change.len() as f64;
+    let days = daily_eqs.len().saturating_sub(1) as f64;
+    let gadg = if days > 0.0 {
+        let total_gain = daily_eqs.last().unwrap() / daily_eqs.first().unwrap();
+        total_gain.powf(1.0 / days) - 1.0
+    } else {
+        0.0
+    };
+
     let mdg = {
         let mut sorted_pct_change = daily_eqs_pct_change.clone();
         sorted_pct_change.sort_by(|a, b| {
@@ -1797,7 +1805,9 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         total_loss / total_profit
     };
 
-    // Calculate position durations and position_unchanged_hours_max
+    // Calculate position durations, unchanged durations, and time in market %
+    let total_indices = fills.last().map_or(0, |f| f.index + 1); // total bars
+    let mut in_market_flags = vec![false; total_indices]; // Tracks market exposure
     let mut positions_opened: HashMap<String, usize> = HashMap::new(); // Tracks position open time
     let mut durations: Vec<usize> = Vec::new(); // Total position durations
     let mut last_fill_time: HashMap<String, usize> = HashMap::new(); // Last fill time per position
@@ -1829,11 +1839,36 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         if fill.position_size == 0.0 {
             if let Some(&start_idx) = positions_opened.get(&key) {
                 durations.push(fill.index - start_idx);
+
+                // Mark bars as "in market"
+                for i in start_idx..=fill.index.min(total_indices - 1) {
+                    in_market_flags[i] = true;
+                }
+
                 positions_opened.remove(&key);
-                last_fill_time.remove(&key); // Reset tracking
+                last_fill_time.remove(&key);
             }
         }
     }
+
+    // Handle still-open positions at end of test
+    let last_index = total_indices - 1;
+    for (key, &start_idx) in positions_opened.iter() {
+        durations.push(last_index - start_idx);
+
+        for i in start_idx..=last_index {
+            in_market_flags[i] = true;
+        }
+
+        if let Some(&last_time) = last_fill_time.get(key) {
+            unchanged_durations.push(last_index - last_time);
+        }
+    }
+
+    // Calculate time in market percent
+    let time_in_market_count = in_market_flags.iter().filter(|&&b| b).count();
+    let time_in_market_percent = 100.0 * time_in_market_count as f64 / total_indices as f64;
+
 
     // Add unchanged durations and total durations for remaining open positions
     let last_index = fills.last().map_or(0, |f| f.index);
@@ -1905,6 +1940,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
     let mut analysis = Analysis::default();
     analysis.adg = adg;
+    analysis.gadg = gadg;
     analysis.mdg = mdg;
     analysis.gain = gain;
     analysis.sharpe_ratio = sharpe_ratio;
@@ -1926,6 +1962,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.position_held_hours_median = position_held_hours_median;
     analysis.position_unchanged_hours_max = position_unchanged_hours_max;
     analysis.rsquared = rsquared;
+    analysis.time_in_market_percent = time_in_market_percent;
 
     analysis
 }
@@ -1974,6 +2011,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
     // Compute weighted metrics as the mean of subset analyses
     analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / 10.0;
+    analysis.gadg_w = subset_analyses.iter().map(|a| a.gadg).sum::<f64>() / 10.0;
     analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / 10.0;
     analysis.sharpe_ratio_w = subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / 10.0;
     analysis.sortino_ratio_w = subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / 10.0;

@@ -50,7 +50,10 @@ import fcntl
 from tqdm import tqdm
 import dictdiffer
 from optimizer_overrides import optimizer_overrides
-
+from rich.table import Table
+from rich.console import Console
+from rich.text import Text
+from rich.style import Style
 
 def make_json_serializable(obj):
     """
@@ -358,7 +361,7 @@ class Evaluator:
             analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
 
         analyses_combined = self.combine_analyses(analyses)
-        w_0, w_1 = self.calc_fitness(analyses_combined)
+        w_0, w_1 = self.calc_fitness(analyses_combined, individual)
         analyses_combined.update({"w_0": w_0, "w_1": w_1})
 
         data = {
@@ -397,7 +400,7 @@ class Evaluator:
 
     
     
-    def calc_fitness(self, analyses_combined,verbose=True):
+    def calc_fitness(self, analyses_combined,individual,verbose=True):
         modifier = 0.0
         keys = self.config["optimize"]["limits"]
         i = len(keys) + 1
@@ -412,7 +415,8 @@ class Evaluator:
 
         # Define color codes
         RESET = "\033[0m"
-        CYAN = "\033[96m"
+        CYAN = (0, 255, 255)  # Bright cyan (you can tweak as needed)
+
         # Define the custom green and red colors
         GREEN_RGB = (195, 232, 141)
         RED_RGB = (255, 83, 112)
@@ -423,6 +427,8 @@ class Evaluator:
         header_aliases = {
             "adg": "ADG",
             "adg_w": "ADG(w)",
+            "gadg": "GADG",
+            "gadg_w": "GADG(w)",
             "mdg": "MDG",
             "mdg_w": "MDG(w)",
             "gain": "Gain",
@@ -449,6 +455,7 @@ class Evaluator:
             "equity_balance_diff_neg_mean": "E/B Diff - mean",
             "equity_balance_diff_pos_max": "E/B Diff + max",
             "equity_balance_diff_pos_mean": "E/B Diff + mean",
+            "time_in_market_percent": "TiM %"
         }
 
         # Step 2: Single pass to process and gather data
@@ -464,41 +471,60 @@ class Evaluator:
             delta = current - target
 
             # Determine if we expect higher or lower values for the current key
-            if "gain" in keym or "rsquared" in keym or "positions_held_per_day" in keym or "mdg" in keym or "sharpe" in keym or "calmar" in keym or "omega" in keym or "sortino" in keym or "sterling" in keym:
-                expect_higher = True
-            else:
-                expect_higher = False
+            expect_higher_keys = (
+                "gain", "rsquared", "positions_held_per_day", "mdg",
+                "adg", "sharpe", "calmar", "omega", "sortino", "sterling","time_in_market_percent"
+            )
+
+            expect_higher = any(key in keym for key in expect_higher_keys)
+
 
             def normalize_delta(delta, current, target, expect_higher, reward_mode=False):
                 eps = 1e-9
+                delta = current - target
 
                 if current < 0:
-                    return 1.0
+                    return 10**(3)  # Treat invalid values as high penalty
 
+                if reward_mode:
+                    relative_delta = abs(current - target) / max(target, eps)
+                    return -1 * (relative_delta)  # More reward as current exceeds target
+                    
+
+                # Non-reward mode: bounded score between 0 and 1
                 if expect_higher:
                     if delta >= 0:
-                        if reward_mode:
-                            percent_above = delta / max(target, eps)
-                            return -0.9 * min(percent_above, 1.0)# Negative = reward
                         return 0.0
                     else:
                         norm = abs(delta) / max(target, eps)
                         return 0.9 * min(norm, 1.0) + 0.1
                 else:
                     if delta <= 0:
-                        if reward_mode:
-                            percent_below = abs(delta) / max(target, eps)
-                            return -0.9 * min(percent_below, 1.0)
                         return 0.0
                     else:
                         norm = delta / max(current, eps)
                         return 0.9 * min(norm, 1.0) + 0.1
 
 
+            # def normalize_delta(delta, current, target, expect_higher,reward_mode=False):
+            #     eps = 1e-9
+                
+            #     if current < 0:
+            #         return 1.0
+            #     if reward_mode:
+            #         return -1 * (abs(delta) / max(target, eps))
+                
+            #     if expect_higher:
+            #         return max(0, (target - current)/max(target, eps)) # Normalized [0,1]
+            #     else:
+            #         return max(0, (current - target)/max(current, eps))  # Normalized [0,1]
+
+
 
             # Calculate normalized error based on delta and target
             weight = normalize_delta(delta,current,target,expect_higher)
             contribution = (10 ** i) * weight
+            # contribution = normalize_delta(delta,current,target,expect_higher)
 
             i -= 1
             modifier += contribution
@@ -520,100 +546,187 @@ class Evaluator:
                 'expect_higher': expect_higher
             })
 
+        def log_modulus(x):
+            return np.sign(x) * np.log10(1 + abs(x))
+        def rgb_to_hex(rgb):
+            return "#{:02x}{:02x}{:02x}".format(*rgb)
+
         def value_to_color(value, min_value, max_value):
-            eps = 1e-9  # prevent log10(0)
+            # Apply log-modulus transform to all values
+            log_val = log_modulus(value)
+            log_min = log_modulus(min_value)
+            log_max = log_modulus(max_value)
 
-            # Ensure all values are strictly positive for log10
-            value = max(value, eps)
-            min_value = max(min_value, eps)
-            max_value = max(max_value, min_value + eps)
-
-            if max_value == min_value:
+            # Avoid zero division if min == max after transformation
+            if log_max == log_min:
                 norm_value = 0.5
             else:
-                # Log-scale normalization
-                log_min = np.log10(min_value)
-                log_max = np.log10(max_value)
-                log_val = np.log10(value)
-
                 norm_value = (log_val - log_min) / (log_max - log_min)
                 norm_value = np.clip(norm_value, 0, 1)
 
-            # Interpolate between green and red
             r = int(GREEN_RGB[0] + norm_value * (RED_RGB[0] - GREEN_RGB[0]))
             g = int(GREEN_RGB[1] + norm_value * (RED_RGB[1] - GREEN_RGB[1]))
             b = int(GREEN_RGB[2] + norm_value * (RED_RGB[2] - GREEN_RGB[2]))
 
-            return f"\033[38;2;{r};{g};{b}m"
+            return rgb_to_hex((r,g,b))
 
         all_zero_contributions = all(r['contribution'] == 0.0 for r in results)
 
         i = len(keys) + 1
+        console = Console(force_terminal=True, no_color=False, log_path=False, width=159)
 
         # Step 4: Print the results with colorized values
+        table = Table(show_header=True, header_style="bold magenta", title="📊 Optimization Status")
+
+        table.add_column("Status", justify="center")
+        table.add_column("Parameter", justify="center")
+        table.add_column("Target", justify="right")
+        table.add_column("Current", justify="right")
+        table.add_column("Δ", justify="right")
+        table.add_column("Contribution", justify="right")
+        table.add_column("Modifier", justify="right")
+
+        # ideal_targets = {
+        #     "Gain": 10000,
+        #     "DD Worst": 0.0001,
+        #     "DD 1%": 0.0001,
+        #     "E/B Diff - max": 0.0001,
+        #     "E/B Diff - mean": 0.0001,
+        #     "E/B Diff + max": 0.0001,
+        #     "E/B Diff + mean": 0.0001,
+        #     "R²": 1,
+        #     "Sharpe": 1,
+        #     "LPR": 0.0001,
+        #     "Hrs/Pos": 0.0001,
+        #     "Pos/Day": 100,
+        #     "Unchg Max": 1,
+        #     "ADG": 1,
+        #     "Calmar": 1,
+        #     "MDG": 1,
+        #     "Omega": 1,
+        #     "Sortino": 1,
+        #     "Sterling": 1,
+        # }
+        # scaling_values = {
+        #     "Gain": 1,
+        #     "DD Worst": 2,
+        #     "DD 1%": 3,
+        #     "E/B Diff - max": 1,
+        #     "E/B Diff - mean": 1,
+        #     "E/B Diff + max": 1,
+        #     "E/B Diff + mean": 1,
+        #     "R²": 5,
+        #     "Sharpe": 2,
+        #     "LPR": 1,
+        #     "Hrs/Pos": 1,
+        #     "Pos/Day": 2,
+        #     "Unchg Max": 2,
+        #     "ADG": 1,
+        #     "Calmar": 1,
+        #     "MDG": 2,
+        #     "Omega": 2,
+        #     "Sortino": 2,
+        #     "Sterling": 2,
+        # }
+        scaling_values = {
+            "Gain":             2,
+            "DD Worst":         2,
+            # "DD 1%":            2,
+            # "E/B Diff - max":   2,
+            # "E/B Diff - mean":  2,
+            # "E/B Diff + max":   1,
+            # "E/B Diff + mean":  1,
+            "R²":               4,
+            "TiM %":            2, 
+            # "Sharpe":           4,
+            # "LPR":              2,
+            "Hrs/Pos":          1,
+            # "Pos/Day":          3,
+            # "Unchg Max":        3,
+            # "ADG":              5,
+            # "GADG":              5,
+            # "Calmar":           2,
+            # "MDG":              4,
+            # "Omega":            3,
+            # "Sortino":          3,
+            # "Sterling":         3,
+        }
         for result in results:
             key = result['key']
             target = result['target']
             current = result['current']
             delta = result['delta']
-            # contribution = result['contribution']
-            # modifier = result['modifier']
             expect_higher = result['expect_higher']
 
             if all_zero_contributions:
-                if "gain" in key:
-                    contribution = (10 ** (i - 1)) * normalize_delta(result['delta'], result['current'], result['target'], result['expect_higher'], reward_mode=all_zero_contributions)
-                else:
-                    contribution = (10 ** i) * normalize_delta(result['delta'], result['current'], result['target'], result['expect_higher'], reward_mode=all_zero_contributions)
+                # target = ideal_targets[key]
+                # delta = current - target
+
+                try:
+                    contribution = 10**(scaling_values[key]) * normalize_delta(delta, current, target, expect_higher, reward_mode=all_zero_contributions)
+                except:
+                    contribution = 0
+                # contribution = normalize_delta(delta, current, target, expect_higher, reward_mode=all_zero_contributions)
                 modifier += contribution
             else:
                 contribution = result['contribution']
                 modifier = result['modifier']
-            # i -= 1
-            # Status determination
-            if delta >= 0 and expect_higher:
-                status = "~✅ above target"
-            elif delta <= 0 and not expect_higher:
-                status = "~✅ below target"
+
+            # Determine status and color
+            if (delta >= 0 and expect_higher) or (all_zero_contributions and expect_higher):
+                status = "✅ above target"
+            elif (delta <= 0 and not expect_higher) or (all_zero_contributions and not expect_higher):
+                status = "✅ below target"
             elif delta < 0 and expect_higher:
-                status = "~❌ below target"
+                status = "❌ below target"
             elif delta > 0 and not expect_higher:
-                status = "~❌ above target"
+                status = "❌ above target"
 
-            # Decide the color based on status
-            if "✅" in status:
-                status_color = GREEN_RGB
-            elif "❌" in status:
-                status_color = RED_RGB
-            else:
-                status_color = CYAN  # For other cases, like "🔵 neutral" if any
+            status_color = (
+                rgb_to_hex(GREEN_RGB) if "✅" in status
+                else rgb_to_hex(RED_RGB) if "❌" in status
+                else rgb_to_hex(CYAN)
+            )
 
-            # Trim or pad the keym to 30 characters
-            keym_display = (key[:12] + '...') if len(key) > 15 else f"{key:<15}"
+            # keym_display = (key[:12] + '...') if len(key) > 15 else f"{key:<15}"
+            keym_display = f"{key}"
 
-            # Colorize current, contribution, and modifier
-            current_color = CYAN  # Always cyan for current
+            current_color = f"rgb({CYAN[0]},{CYAN[1]},{CYAN[2]})"
             contribution_color = value_to_color(contribution, min_contribution, max_contribution)
             modifier_color = value_to_color(modifier, min_modifier, max_modifier)
 
+            # Create rich.Text objects
+            status_text = Text(status, style=Style(color=status_color))
+            current_text = Text(f"{current:>10.5f}", style=Style(color=current_color))
+            contribution_text = Text(f"{contribution:>12.5e}", style=Style(color=contribution_color))
+            modifier_text = Text(f"{modifier:>12.5e}", style=Style(color=modifier_color))
+            # Add row
+            table.add_row(
+                status_text,
+                f"{keym_display}",
+                f"{target:>10.5f}",
+                current_text,
+                f"{delta:+10.5f}",
+                contribution_text,
+                modifier_text
+            )
 
-            # Final colorful, aligned print
-            print(f"\033[38;2;{status_color[0]};{status_color[1]};{status_color[2]}m{status:<3}{RESET} "
-                f"[{keym_display}] "
-                f"Target: {target:>10.5f}, "
-                f"Current: {current_color}{current:>10.5f}{RESET}, "
-                f"Δ: {delta:+10.5f}, "
-                f"Contribution: {contribution_color}{contribution:>12.5e}{RESET}, "
-                f"Modifier: {modifier_color}{modifier:>12.5e}{RESET}")
+        # Display the table
+        console.print(table)
 
 
         drawdown = analyses_combined.get(f"{prefix}drawdown_worst_max", 0)
         equity_diff = analyses_combined.get(f"{prefix}equity_balance_diff_neg_max_max", 0)
+        npos = individual[19]
 
+        # TODO Here's the min 2 npos
+        # if npos < 2:
+        #     modifier = modifier * 10**(len(keys) + 5)
+        #     print(f"~⚠️ Less than 2 positions")
         if drawdown >= 1.0 or equity_diff >= 1.0:
             if verbose:
                 print(f"~⚠️ Drawdown or Equity cap hit! Drawdown: {drawdown:.2f}, Equity Diff: {equity_diff:.2f}")
-            w_0 = w_1 = modifier
+            w_0 = w_1 = modifier * 10**(len(keys) + 5)
         else:
             scoring_keys = self.config["optimize"]["scoring"]
             assert len(scoring_keys) == 2, f"~❌ Expected 2 fitness scoring keys, got {len(scoring_keys)}"
@@ -639,7 +752,7 @@ class Evaluator:
             return scores[0], scores[1]
 
         if verbose:
-            print(f"~🥇 Final Equal Scores (penalized): {w_0:.5f}, {w_1:.5f}")
+            print(f"~🥇 Final Equal Scores (penalized): {w_0:.5e}, {w_1:.5e}")
         return w_0, w_1
 
 
@@ -915,8 +1028,117 @@ async def initEvaluator(config_path: str = None, **kwargs):
     )
 
     logging.info(f"Finished initializing evaluator...")
-    return evaluator
+    return evaluator, config
 
+
+async def myMain(args):
+    evaluator , config = await initEvaluator(args.config_path)
+
+    creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
+    creator.create("Individual", list, fitness=creator.FitnessMulti)
+
+    toolbox = base.Toolbox()
+
+    # Define parameter bounds
+    param_bounds = sort_dict_keys(config["optimize"]["bounds"])
+    for k, v in param_bounds.items():
+        if len(v) == 1:
+            param_bounds[k] = [v[0], v[0]]
+
+    # Register attribute generators
+    for i, (param_name, (low, high)) in enumerate(param_bounds.items()):
+        toolbox.register(f"attr_{i}", np.random.uniform, low, high)
+
+    def create_individual():
+        return creator.Individual(
+            [getattr(toolbox, f"attr_{i}")() for i in range(len(param_bounds))]
+        )
+
+    toolbox.register("individual", create_individual)
+    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+    overrides_list = config.get("optimize", {}).get("enable_overrides", [])
+
+    # Register the evaluation function
+    toolbox.register("evaluate", evaluator.evaluate, overrides_list=overrides_list)
+
+    # Register genetic operators
+    toolbox.register(
+        "mate",
+        cxSimulatedBinaryBoundedWrapper,
+        eta=20.0,
+        low=[low for low, high in param_bounds.values()],
+        up=[high for low, high in param_bounds.values()],
+    )
+    toolbox.register(
+        "mutate",
+        mutPolynomialBoundedWrapper,
+        eta=20.0,
+        low=[low for low, high in param_bounds.values()],
+        up=[high for low, high in param_bounds.values()],
+        indpb=1.0 / len(param_bounds),
+    )
+    toolbox.register("select", tools.selNSGA2)
+
+    # Parallelization setup
+    logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
+    # pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
+    # toolbox.register("map", pool.map)
+    logging.info(f"Finished initializing multiprocessing pool.")
+
+    # Create initial population
+    logging.info(f"Creating initial population...")
+
+    bounds = [(low, high) for low, high in param_bounds.values()]
+    starting_individuals = configs_to_individuals(
+        get_starting_configs(args.starting_configs), param_bounds
+    )
+    if (nstart := len(starting_individuals)) > (popsize := config["optimize"]["population_size"]):
+        logging.info(f"Number of starting configs greater than population size.")
+        logging.info(f"Increasing population size: {popsize} -> {nstart}")
+        config["optimize"]["population_size"] = nstart
+
+    population = toolbox.population(n=config["optimize"]["population_size"])
+    if starting_individuals:
+        bounds = [(low, high) for low, high in param_bounds.values()]
+        for i in range(len(starting_individuals)):
+            adjusted = [
+                max(min(x, bounds[z][1]), bounds[z][0])
+                for z, x in enumerate(starting_individuals[i])
+            ]
+            population[i] = creator.Individual(adjusted)
+
+        for i in range(len(starting_individuals), len(population) // 2):
+            mutant = deepcopy(population[np.random.choice(range(len(starting_individuals)))])
+            toolbox.mutate(mutant)
+            population[i] = mutant
+
+    logging.info(f"Initial population size: {len(population)}")
+
+    # Set up statistics and hall of fame
+    stats = tools.Statistics(lambda ind: ind.fitness.values)
+    stats.register("avg", np.mean, axis=0)
+    stats.register("std", np.std, axis=0)
+    stats.register("min", np.min, axis=0)
+    stats.register("max", np.max, axis=0)
+
+    logbook = tools.Logbook()
+    logbook.header = "gen", "evals", "std", "min", "avg", "max"
+
+    hof = tools.ParetoFront()
+
+    population, logbook = algorithms.eaMuPlusLambda(
+        population,
+        toolbox,
+        evaluator=evaluator,
+        mu=config["optimize"]["population_size"],
+        lambda_=config["optimize"]["population_size"],
+        cxpb=config["optimize"]["crossover_probability"],
+        mutpb=config["optimize"]["mutation_probability"],
+        ngen=max(1, int(config["optimize"]["iters"] / len(population))),
+        stats=stats,
+        halloffame=hof,
+        verbose=True,
+    )
 
 async def main():
     manage_rust_compilation()
@@ -943,12 +1165,14 @@ async def main():
         level=logging.INFO,
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    await myMain(args)
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
         config = load_config("configs/template.json", verbose=False)
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path, verbose=False)
+    
     old_config = deepcopy(config)
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
@@ -1135,8 +1359,8 @@ async def main():
 
         # Parallelization setup
         logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
-        pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
-        toolbox.register("map", pool.map)
+        # pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
+        # toolbox.register("map", pool.map)
         logging.info(f"Finished initializing multiprocessing pool.")
 
         # Create initial population
@@ -1182,9 +1406,12 @@ async def main():
 
         # Run the optimization
         logging.info(f"Starting optimize...")
+        evaluator = await initEvaluator(args.config_path)
+
         population, logbook = algorithms.eaMuPlusLambda(
             population,
             toolbox,
+            evaluator=evaluator,
             mu=config["optimize"]["population_size"],
             lambda_=config["optimize"]["population_size"],
             cxpb=config["optimize"]["crossover_probability"],

@@ -20,6 +20,34 @@ from uuid import uuid4
 from copy import deepcopy
 from collections import defaultdict
 from sortedcontainers import SortedDict
+from rich.traceback import Traceback
+
+from rich.console import Console
+from rich.theme import Theme
+from rich.traceback import install
+from rich.table import Table
+from rich.text import Text
+from datetime import datetime
+
+# For terminal output (pretty)
+custom_theme = Theme({
+    "info": "dim cyan",
+    "success": "bold green",
+    "warning": "bold yellow",
+    "error": "bold red",
+    "debug": "magenta"
+})
+
+console = Console(force_terminal=True, no_color=False, log_path=False, width=159)
+console_logfile = Console(file=open("price_movements.log", "a"), force_terminal=True, color_system="truecolor", width=159)
+
+install(console=console)  # Pretty tracebacks in terminal
+
+def log_to_file(message: str):
+    # Prefix timestamp manually
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Rich Console prints the message with color markup & timestamp
+    console_logfile.print(f"[dim]{timestamp}[/dim] {message}")
 
 from procedures import (
     load_broker_code,
@@ -161,19 +189,34 @@ class Passivbot:
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
 
     async def start_bot(self):
-        logging.info(f"Starting bot {self.exchange}...")
+        msg = f"🤖 Starting bot for exchange: [bold]{self.exchange}[/bold]..."
+        console.print(f"[info]{msg}[/info]")
+        log_to_file(f"[INFO] {msg}")
+
         await self.init_markets()
         await asyncio.sleep(1)
-        logging.info(f"Starting data maintainers...")
+
+        msg = "🛠️  Starting data maintainers..."
+        console.print(f"[info]{msg}[/info]")
+        log_to_file(f"[INFO] {msg}")
+
         await self.start_data_maintainers()
         await self.wait_for_ohlcvs_1m_to_update()
-        logging.info(f"starting websocket...")
+
+        msg = "📡 Starting websocket..."
+        console.print(f"[info]{msg}[/info]")
+        log_to_file(f"[INFO] {msg}")
         self.previous_REST_update_ts = utc_ms()
+
         await self.prepare_for_execution()
 
-        logging.info(f"starting execution loop...")
+        msg = "🚀 Starting execution loop..."
+        console.print(f"[info]{msg}[/info]")
+        log_to_file(f"[INFO] {msg}")
+
         if not self.debug_mode:
             await self.run_execution_loop()
+
 
     async def init_markets(self, verbose=True):
         # called at bot startup and once an hour thereafter
@@ -335,30 +378,41 @@ class Passivbot:
         await self.execution_cycle()
         await self.update_EMAs()
         await self.update_exchange_configs()
+
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
 
-        # debug duplicates
+        # 🐞 Debug duplicate cancels
         seen = set()
         for elm in to_cancel:
-            key = str(elm["price"]) + str(elm["qty"])
+            key = f"{elm['price']}{elm['qty']}"
             if key in seen:
-                logging.info(f"debug duplicate order cancel {elm}")
+                msg = f"🐞 Duplicate cancel detected: {elm}"
+                console.print(f"[debug]{msg}[/debug]")
+                log_to_file(f"[DEBUG] {msg}")
             seen.add(key)
 
+        # 🐞 Debug duplicate creates
         seen = set()
         for elm in to_create:
-            key = str(elm["price"]) + str(elm["qty"])
+            key = f"{elm['price']}{elm['qty']}"
             if key in seen:
-                logging.info(f"debug duplicate order create {elm}")
+                msg = f"🐞 Duplicate create detected: {elm}"
+                console.print(f"[debug]{msg}[/debug]")
+                log_to_file(f"[DEBUG] {msg}")
             seen.add(key)
 
-        # format custom_id
+        # Format custom_id
         to_create = self.format_custom_ids(to_create)
+
         if self.debug_mode:
             if to_cancel:
-                print(f"would cancel {len(to_cancel)} orders")
-            # for x in to_cancel:
-            #    pprint.pprint(x)
+                msg = f"🚫 Would cancel {len(to_cancel)} orders"
+                console.print(f"[info]{msg}[/info]")
+                log_to_file(f"[INFO] {msg}")
+            if to_create:
+                msg = f"🆕 Would create {len(to_create)} orders"
+                console.print(f"[info]{msg}[/info]")
+                log_to_file(f"[INFO] {msg}")
         else:
             res = await self.execute_cancellations(
                 to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
@@ -366,31 +420,38 @@ class Passivbot:
             if res:
                 for elm in res:
                     self.remove_order(elm, source="POST")
-        if self.debug_mode:
-            if to_create:
-                print(f"would create {len(to_create)} orders")
-            # for x in to_create:
-            #    pprint.pprint(x)
-        elif self.balance < self.balance_threshold:
-            logging.info(f"Balance too low: {self.balance} {self.quote}. Not creating any orders.")
-        else:
-            res = None
-            try:
-                res = await self.execute_orders(
-                    to_create[: self.config["live"]["max_n_creations_per_batch"]]
-                )
-                if res:
-                    for elm in res:
-                        self.add_new_order(elm, source="POST")
-            except Exception as e:
-                logging.error(f"error executing orders {to_create} {e}")
-                print_async_exception(res)
-                traceback.print_exc()
-                await self.restart_bot_on_too_many_errors()
+
+        if not self.debug_mode:
+            if self.balance < self.balance_threshold:
+                msg = f"💸 Balance too low: {self.balance} {self.quote}. Not creating any orders."
+                console.print(f"[warning]{msg}[/warning]")
+                log_to_file(f"[WARNING] {msg}")
+            else:
+                res = None
+                try:
+                    res = await self.execute_orders(
+                        to_create[: self.config["live"]["max_n_creations_per_batch"]]
+                    )
+                    if res:
+                        for elm in res:
+                            self.add_new_order(elm, source="POST")
+                except Exception as e:
+                    msg = f"❌ Error executing orders: {e}"
+                    console.print(f"[error]{msg}[/error]")
+                    log_to_file(f"[ERROR] {msg}")
+                    print_async_exception(res)
+                    from rich.traceback import Traceback
+                    tb = Traceback()
+                    console.print(tb)
+                    log_to_file(str(tb))
+                    await self.restart_bot_on_too_many_errors()
+
         if to_cancel or to_create:
             self.previous_REST_update_ts = 0
+
         if self.debug_mode:
             return to_cancel, to_create
+
 
     def is_forager_mode(self, pside=None):
         if pside is None:
@@ -811,7 +872,10 @@ class Passivbot:
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
         for k, v in res.items():
             for elm in v:
-                logging.info(f"{k} {elm}")
+                msg = f"🔁 {k}: {elm}"
+                console.print(f"[info]{msg}[/info]")
+                log_to_file(f"[INFO] {msg}")
+
 
     def get_filtered_coins(self, pside):
         # filter coins by age
@@ -918,39 +982,68 @@ class Passivbot:
                 self.open_orders[order["symbol"]] = []
             if order["id"] not in {x["id"] for x in self.open_orders[order["symbol"]]}:
                 self.open_orders[order["symbol"]].append(order)
-                logging.info(
-                    f"  created {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                msg = (
+                    f"[success]✅ New Order: [bold]{self.pad_sym(order['symbol'])}[/bold] "
+                    f"{order['side']} {order['qty']} {order['position_side']} @ {order['price']} "
+                    f"📦 Source: {source}[/success]"
                 )
+                console.print(msg)
+                log_to_file(msg)
                 return True
         except Exception as e:
-            logging.error(f"failed to add order to self.open_orders {source} {order} {e}")
-            traceback.print_exc()
+            msg = f"[error]🚨 Failed to add order | Source: {source} | Order: {order} | Error: {e}[/error]"
+            console.print(msg)
+            log_to_file(msg)
+            # Log rich traceback to both console and file
+            tb = Traceback()
+            console.print(tb)
+            log_to_file(str(tb))
             return False
 
     def remove_order(self, order: dict, source="WS", reason="cancelled"):
         try:
             if not order or "id" not in order:
-                logging.info(f"debug remove_order, missing 'id' {order}")
+                msg = f"[debug]🐞 remove_order: missing 'id' {order}[/debug]"
+                console.print(msg)
+                log_to_file(msg)
                 return False
+
             if "symbol" not in order or order["symbol"] is None:
-                logging.info(f"debug remove_order, missing 'symbol' {order}")
+                msg = f"[debug]🐞 remove_order: missing 'symbol' {order}[/debug]"
+                console.print(msg)
+                log_to_file(msg)
                 return False
+
             if order["symbol"] not in self.open_orders:
-                logging.info(f"debug remove_order, 'symbol' not in self.open_orders {order}")
-                self.open_orders[order["symbol"]] = []
+                msg = f"[debug]🐞 remove_order: symbol not in open_orders {order}[/debug]"
+                console.print(msg)
+                log_to_file(msg)
+                self.open_orders[order["symbol"]] = []  # Initialize empty list anyway
                 return False
+
             if order["id"] in {x["id"] for x in self.open_orders[order["symbol"]]}:
                 self.open_orders[order["symbol"]] = [
                     x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
                 ]
-                logging.info(
-                    f"{reason} {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                msg = (
+                    f"[info]🗑️ {reason.capitalize()}: [bold]{self.pad_sym(order['symbol'])}[/bold] "
+                    f"{order['side']} {order['qty']} {order['position_side']} @ {order['price']} "
+                    f"📦 Source: {source}[/info]"
                 )
+                console.print(msg)
+                log_to_file(msg)
                 return True
+
         except Exception as e:
-            logging.error(f"failed to remove order from self.open_orders {order} {e}")
-            traceback.print_exc()
+            from rich.traceback import Traceback
+            msg = f"[error]❌ Failed to remove order | Order: {order} | Error: {e}[/error]"
+            console.print(msg)
+            log_to_file(msg)
+            tb = Traceback()
+            console.print(tb)
+            log_to_file(str(tb))
             return False
+
 
     def handle_order_update(self, upd_list):
         try:
@@ -980,14 +1073,29 @@ class Passivbot:
         try:
             upd[self.quote]["total"] = round_dynamic(upd[self.quote]["total"], 10)
             equity = upd[self.quote]["total"] + self.calc_upnl_sum()
+
             if self.balance != upd[self.quote]["total"]:
-                logging.info(
-                    f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {equity:.4f} source: {source}"
+                msg = (
+                    f"💰 Balance changed: [bold]{self.balance}[/bold] → "
+                    f"[bold green]{upd[self.quote]['total']}[/bold green] | "
+                    f"📊 Equity: [cyan]{equity:.4f}[/cyan] | "
+                    f"🔗 Source: [italic]{source}[/italic]"
                 )
+                console.print(f"[info]{msg}[/info]")
+                log_to_file(f"[INFO] {msg}")
+
             self.balance = max(upd[self.quote]["total"], 1e-12)
+
         except Exception as e:
-            logging.error(f"error updating balance from websocket {upd} {e}")
-            traceback.print_exc()
+            msg = f"❌ Error updating balance from WS: {upd} {e}"
+            console.print(f"[error]{msg}[/error]")
+            log_to_file(f"[ERROR] {msg}")
+
+            from rich.traceback import Traceback
+            tb = Traceback()
+            console.print(tb)
+            log_to_file(str(tb))
+
 
     def handle_ohlcv_1m_update(self, symbol, upd):
         if symbol not in self.ohlcvs_1m:
@@ -1066,15 +1174,21 @@ class Passivbot:
             self.get_exchange_time()
             - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
         )
+
         if not hasattr(self, "pnls"):
             self.pnls = []
+
         old_ids = {elm["id"] for elm in self.pnls}
+
         if len(self.pnls) == 0:
             await self.init_pnls()
+
         start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
         res = await self.fetch_pnls(start_time=start_time, limit=100)
+
         if res in [None, False]:
             return False
+
         new_pnls = [x for x in res if x["id"] not in old_ids]
         self.pnls = sorted(
             {
@@ -1082,65 +1196,98 @@ class Passivbot:
             }.values(),
             key=lambda x: x["timestamp"],
         )
+
         if new_pnls:
             new_income = sum([x["pnl"] for x in new_pnls])
             if new_income != 0.0:
-                logging.info(
-                    f"{len(new_pnls)} new pnl{'s' if len(new_pnls) > 1 else ''} {new_income} {self.quote}"
-                )
+                msg = f"📈 {len(new_pnls)} new PnL{'s' if len(new_pnls) > 1 else ''} → 💵 {new_income:.4f} {self.quote}"
+                console.print(f"[info]{msg}[/info]")
+                log_to_file(f"[INFO] {msg}")
+
             try:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
             except Exception as e:
-                logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
+                err_msg = f"❌ Error dumping PnLs to cache: {self.pnls_cache_filepath} - {e}"
+                console.print(f"[error]{err_msg}[/error]")
+                log_to_file(f"[ERROR] {err_msg}")
+
+                from rich.traceback import Traceback
+                tb = Traceback()
+                console.print(tb)
+                log_to_file(str(tb))
+
         self.upd_timestamps["pnls"] = utc_ms()
         return True
 
     async def update_open_orders(self):
         if not hasattr(self, "open_orders"):
             self.open_orders = {}
+
         res = None
         try:
             res = await self.fetch_open_orders()
             if res in [None, False]:
                 return False
+
             self.fetched_open_orders = res
             open_orders = res
+
             oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
             created_prints, cancelled_prints = [], []
+
             for oo in open_orders:
                 if oo["id"] not in oo_ids_old:
-                    # there was a new open order not caught by websocket
                     created_prints.append(
-                        f"new order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                        f"🆕 Order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} [dim]source: REST[/dim]"
                     )
+
             oo_ids_new = {elm["id"] for elm in open_orders}
             for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
                 if oo["id"] not in oo_ids_new:
-                    # there was an order cancellation not caught by websocket
                     cancelled_prints.append(
-                        f"cancelled {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                        f"❌ Cancelled {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} [dim]source: REST[/dim]"
                     )
+
+            # Replace open_orders
             self.open_orders = {}
             for elm in open_orders:
-                if elm["symbol"] not in self.open_orders:
-                    self.open_orders[elm["symbol"]] = []
-                self.open_orders[elm["symbol"]].append(elm)
+                self.open_orders.setdefault(elm["symbol"], []).append(elm)
+
+            # Display created orders
             if len(created_prints) > 12:
-                logging.info(f"{len(created_prints)} new open orders")
+                msg = f"🆕 {len(created_prints)} new open orders (via REST)"
+                console.print(f"[info]{msg}[/info]")
+                log_to_file(f"[INFO] {msg}")
             else:
                 for line in created_prints:
-                    logging.info(line)
+                    console.print(f"[green]{line}[/green]")
+                    log_to_file(f"[INFO] {line}")
+
+            # Display cancelled orders
             if len(cancelled_prints) > 12:
-                logging.info(f"{len(created_prints)} cancelled open orders")
+                msg = f"❌ {len(cancelled_prints)} cancelled open orders (via REST)"
+                console.print(f"[info]{msg}[/info]")
+                log_to_file(f"[INFO] {msg}")
             else:
                 for line in cancelled_prints:
-                    logging.info(line)
+                    console.print(f"[red]{line}[/red]")
+                    log_to_file(f"[INFO] {line}")
+
             self.upd_timestamps["open_orders"] = utc_ms()
             return True
+
         except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
+            from rich.traceback import Traceback
+
+            msg = f"💥 Error in [bold]{get_function_name()}[/bold]: {e}"
+            console.print(f"[error]{msg}[/error]")
+            log_to_file(f"[ERROR] {msg}")
+
+            tb = Traceback()
+            console.print(tb)
+            log_to_file(str(tb))
+
             print_async_exception(res)
-            traceback.print_exc()
             return False
 
     async def determine_utc_offset(self, verbose=True):
@@ -1223,40 +1370,49 @@ class Passivbot:
     def log_position_changes(self, position_changes, positions_new, rd=6) -> str:
         if not position_changes:
             return ""
-        table = PrettyTable()
-        table.border = False
-        table.header = False
-        table.padding_width = 0  # Reduces padding between columns to zero
+
+        table = Table(show_header=False, box=None, padding=(0, 1), expand=False)
+        output_lines = []
+
         for symbol, pside in position_changes:
-            wallet_exposure = (
-                pbr.qty_to_cost(
-                    positions_new[symbol][pside]["size"],
-                    positions_new[symbol][pside]["price"],
-                    self.c_mults[symbol],
+            try:
+                wallet_exposure = (
+                    pbr.qty_to_cost(
+                        positions_new[symbol][pside]["size"],
+                        positions_new[symbol][pside]["price"],
+                        self.c_mults[symbol],
+                    )
+                    / self.balance
                 )
-                / self.balance
-            )
+            except Exception as e:
+                wallet_exposure = 0.0
+
             try:
                 wel = self.live_configs[symbol][pside]["wallet_exposure_limit"]
                 WE_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             except Exception as e:
-                logging.error(f"error with log_position_changes {e}")
+                msg = f"💥 error in log_position_changes() for {symbol} {pside}: {e}"
+                console.print(f"[red]{msg}[/red]")
+                log_to_file(f"[ERROR] {msg}")
                 WE_ratio = 0.0
+
             last_price = or_default(self.get_last_price, symbol, default=0.0)
+
             try:
                 pprice_diff = (
                     calc_pprice_diff(pside, positions_new[symbol][pside]["price"], last_price)
                     if last_price
                     else 0.0
                 )
-            except:
+            except Exception:
                 pprice_diff = 0.0
+
             try:
                 upnl = (
                     calc_pnl(
                         pside,
                         positions_new[symbol][pside]["price"],
-                        self.get_last_price(symbol),
+                        last_price,
                         positions_new[symbol][pside]["size"],
                         self.inverse,
                         self.c_mults[symbol],
@@ -1264,41 +1420,37 @@ class Passivbot:
                     if last_price
                     else 0.0
                 )
-            except Exception as e:
+            except Exception:
                 upnl = 0.0
-            table.add_row(
-                [
-                    symbol + " ",
-                    pside + " ",
-                    (
-                        round_dynamic(self.positions[symbol][pside]["size"], rd)
-                        if symbol in self.positions
-                        else 0.0
-                    ),
-                    " @ ",
-                    (
-                        round_dynamic(self.positions[symbol][pside]["price"], rd)
-                        if symbol in self.positions
-                        else 0.0
-                    ),
-                    " -> ",
-                    round_dynamic(positions_new[symbol][pside]["size"], rd),
-                    " @ ",
-                    round_dynamic(positions_new[symbol][pside]["price"], rd),
-                    " WE: ",
-                    round_dynamic(wallet_exposure, max(3, rd - 2)),
-                    " WE ratio: ",
-                    round(WE_ratio, 3),
-                    " PA dist: ",
-                    round(pprice_diff, 4),
-                    " upnl: ",
-                    round_dynamic(upnl, max(3, rd - 1)),
-                ]
+
+            old_size = round_dynamic(
+                self.positions[symbol][pside]["size"], rd
+            ) if symbol in self.positions else 0.0
+            old_price = round_dynamic(
+                self.positions[symbol][pside]["price"], rd
+            ) if symbol in self.positions else 0.0
+
+            new_size = round_dynamic(positions_new[symbol][pside]["size"], rd)
+            new_price = round_dynamic(positions_new[symbol][pside]["price"], rd)
+
+            line = Text.assemble(
+                ("📈 ", "bold"),
+                (f"{symbol} ", "cyan"),
+                (f"{pside} ", "magenta"),
+                (f"{old_size}", "dim"), (" @ ", "dim"), (f"{old_price}", "dim"),
+                (" -> ", "dim"),
+                (f"{new_size}", "green bold"), (" @ ", "dim"), (f"{new_price}", "green"),
+                ("  WE: ", "blue"), (f"{round_dynamic(wallet_exposure, max(3, rd - 2))}", "bold"),
+                ("  WE ratio: ", "yellow"), (f"{round(WE_ratio, 3)}", "yellow"),
+                ("  PA dist: ", "cyan"), (f"{round(pprice_diff, 4)}", "cyan"),
+                ("  uPNL: ", "bright_green"), (f"{round_dynamic(upnl, max(3, rd - 1))}", "bright_green"),
             )
-        string = table.get_string()
-        for line in string.splitlines():
-            logging.info(line)
-        return string
+
+            console.print(line)
+            log_to_file(f"[POSITION] {line.plain}")
+            output_lines.append(line.plain)
+
+        return "\n".join(output_lines)
 
     def update_effective_min_cost(self, symbol=None):
         if not hasattr(self, "effective_min_cost"):

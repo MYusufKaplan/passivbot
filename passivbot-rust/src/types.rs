@@ -241,6 +241,7 @@ pub struct Fill {
 #[derive(Debug, Clone, Serialize)]
 pub struct Analysis {
     pub adg: f64,
+    pub gadg: f64,
     pub mdg: f64,
     pub gain: f64,
     pub sharpe_ratio: f64,
@@ -264,6 +265,7 @@ pub struct Analysis {
     pub position_unchanged_hours_max: f64,
 
     pub adg_w: f64,
+    pub gadg_w: f64,
     pub mdg_w: f64,
     pub sharpe_ratio_w: f64,
     pub sortino_ratio_w: f64,
@@ -273,12 +275,14 @@ pub struct Analysis {
     pub loss_profit_ratio_w: f64,
 
     pub rsquared: f64,
+    pub time_in_market_percent: f64,
 }
 
 impl Default for Analysis {
     fn default() -> Self {
         Analysis {
             adg: 0.0,
+            gadg: 0.0,
             mdg: 0.0,
             gain: 0.0,
             sharpe_ratio: 0.0,
@@ -301,6 +305,7 @@ impl Default for Analysis {
             position_unchanged_hours_max: 0.0,
 
             adg_w: 0.0,
+            gadg_w: 0.0,
             mdg_w: 0.0,
             sharpe_ratio_w: 0.0,
             sortino_ratio_w: 0.0,
@@ -308,7 +313,8 @@ impl Default for Analysis {
             calmar_ratio_w: 0.0,
             sterling_ratio_w: 0.0,
             loss_profit_ratio_w: 1.0,
-            rsquared: 0.0
+            rsquared: 0.0,
+            time_in_market_percent: 0.0
         }
     }
 }
