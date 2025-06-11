@@ -4,7 +4,8 @@ from datetime import datetime
 from gate_api import ApiClient, Configuration, FuturesApi
 import json
 import os
-
+from datetime import datetime, timezone,timedelta
+import pickle
 # === CONFIGURATION ===
 SETTLE = "usdt"
 POLL_INTERVAL = 10  # seconds
@@ -65,50 +66,50 @@ latest_close_time = state["latest_close_time"]
 # === MAIN LOOP ===
 print("🚀 Gate.io Futures Position Tracker Started (polling every 10 seconds)\n")
 
-while True:
-    try:
-        timestamp = int(time.time())
+STEP = timedelta(days=1)  # or use timedelta(hours=1) for tighter slices
 
-        # === CHECK CURRENT OPEN POSITIONS ===
-        positions = futures_api.list_positions(settle=SETTLE)
-        current_positions = {}
+start_time = datetime(2025, 3, 5, tzinfo=timezone.utc)
+end_date = datetime(2025, 5, 6, tzinfo=timezone.utc)
 
-        for pos in positions:
-            symbol = pos.contract
-            size = float(pos.size)
-            entry_price = float(pos.entry_price)
-            leverage = float(pos.leverage)
+all_closed_positions = []
+pnls = {}
 
-            current_positions[symbol] = size
+while start_time < end_date:
+    # Slide 1 day forward
+    window_end = min(start_time + STEP, end_date)
+    from_ts = int(start_time.timestamp())
+    to_ts = int(window_end.timestamp())
 
-            if symbol not in open_positions and size > 0:
-                send_telegram_alert(f"📈 Position Opened: {symbol} | Size: {size} | Entry: {entry_price}")
+    print(f"🔄 Fetching positions from {start_time} to {window_end}")
 
-            # elif symbol in open_positions:
-            #     prev_size = open_positions[symbol]
-            #     if size < prev_size:
-            #         send_telegram_alert(f"🔄 Position Partially Closed: {symbol} | New Size: {size} (Prev: {prev_size})")
+    resp = futures_api.list_position_close(
+        settle=SETTLE,
+        _from=from_ts,
+        to=to_ts,
+        limit=1000,
+        offset=0
+    )
 
-        # === CHECK FOR CLOSED POSITIONS ===
-        closes = futures_api.list_position_close(SETTLE, limit=10)
-        closes_sorted = sorted(closes, key=lambda c: c.time, reverse=True)
+    for position in resp:
+        symbol = position.contract
+        pnl = float(position.pnl)
+        pnls[symbol] = pnls.get(symbol, 0) + pnl
+        all_closed_positions.append(position)
 
-        for close in closes_sorted:
-            if close.time > latest_close_time:
-                realized_pnl = float(close.pnl)
-                latest_close_time = close.time
-                send_telegram_alert(f"📉 Position Closed: {close.contract} | Realized PnL: {realized_pnl:+.2f} USDT")
+    start_time = window_end  # move window forward
 
-        # === UPDATE OPEN POSITIONS STATE ===
-        open_positions = current_positions
 
-        print(f"[{datetime.utcfromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')}] ✅ Positions checked.")
 
-        # Update persistent state after processing everything
-        save_state(open_positions, latest_close_time)
-    except Exception as e:
-        print(f"[ERROR] {e}")
-    
+# for transaction in all_closed_positions:
+#     try:
+#         pnls[transaction.contract] += float(transaction.pnl)
+#     except:
+#         pnls[transaction.contract] = float(transaction.pnl)
 
-    time.sleep(POLL_INTERVAL)
-
+with open("closed_positions.json", "w", encoding="utf-8") as f:
+    json.dump(pnls, f, indent=4, ensure_ascii=False)
+    print("✅📁 JSON file saved: closed_positions.json")
+# Print PnLs
+print("📈 Closed Positions PnL since April 30, 2025:\n")
+for pos in all_closed_positions:
+    print(f"🔹 Symbol: {pos.contract}, PnL: {pos.realised_point}, Time: {pos.close_time}")

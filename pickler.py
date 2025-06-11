@@ -14,17 +14,33 @@ def load_pickle_file(file_path):
         print(f"❌ An unexpected error occurred: {e}")
 
 # Example usage
-file_path = 'evaluator.pkl'  # Replace with your actual file path
+import os
+
+file_path = 'checkpoint.pkl'  # Replace with your actual file path
 data = load_pickle_file(file_path)
+DESIRED_POP_SIZE = 1000
 
 if data:
-    print("📦 Data content preview:")
-    data['btc_usd_shared_memory_files'] = {"combined": '/home/myusuf/Projects/passivbot/btc_usd_tempFile'}
-    # sample = data['population'][0]
-    # data['population']
-    # for idx in range(0,len(data["population"])):
-    #     data['population'].pop()
-    # data['population'].append(sample)
-    with open(file_path, "wb") as f:
-                pickle.dump(data, f)
-    # print(data)
+    print("📦 Starting pickle sizer...")
+    print(f"🧠 Current population size: {len(data['population'])}")
+    print(f"🎯 Desired population size: {DESIRED_POP_SIZE}")
+
+    sample = data['population'][0]
+
+    while len(data["population"]) != DESIRED_POP_SIZE:
+        if len(data["population"]) > DESIRED_POP_SIZE:
+            removed = data['population'].pop()
+            print(f"➖ Removed one individual. New size: {len(data['population'])}")
+        else:
+            data["population"].append(sample)
+            print(f"➕ Added one individual. New size: {len(data['population'])}")
+
+    print("✅ Finished pickle sizer!")
+    print(f"📊 Final population size: {len(data['population'])}")
+else:
+    print("❌ Failed to load data from pickle file.")
+
+# data['population'].append(sample)
+with open(file_path, "wb") as f:
+    pickle.dump(data, f)
+# print(data)

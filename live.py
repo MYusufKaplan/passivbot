@@ -7,6 +7,8 @@ from rich.table import Table
 from rich.prompt import Prompt
 import shutil
 from tabulate import tabulate
+from time import sleep
+
 
 console = Console()
 
@@ -17,21 +19,23 @@ primary_points_per_rank = {1: 5, 2: 3, 3: 2, 4: 1}
 # primary_points_per_rank = {1: 10, 2: 6, 3: 4, 4: 2}
 secondary_points_per_rank = {1: 5, 2: 3, 3: 2, 4: 1}
 
+top_ranking_points = 100
+
 # Define elite metrics
 elite_metrics = [
-    "adg", "adg_w", "gain"
+    "adg", "gadg","gain"
 ]
 
 # Define priority metrics
 priority_metrics = [
-    "mdg", "mdg_w", "loss_profit_ratio", "loss_profit_ratio_w", "position_held_hours_mean", "positions_held_per_day", "sharpe_ratio", "sharpe_ratio_w", "rsquared"
+    "mdg",  "loss_profit_ratio","position_held_hours_mean", "positions_held_per_day", "time_in_market_percent", "sharpe_ratio", "rsquared"
 ]
 
 # Define lower-is-better metrics
 lower_better_metrics = [
     "drawdown_worst", "drawdown_worst_mean_1pct", "equity_balance_diff_neg_max",
     "equity_balance_diff_neg_mean", "expected_shortfall_1pct",
-    "loss_profit_ratio", "loss_profit_ratio_w",
+    "loss_profit_ratio",
     "position_held_hours_mean", "position_unchanged_hours_max"
 ]
 
@@ -39,6 +43,8 @@ lower_better_metrics = [
 header_aliases = {
     "adg": "ADG",
     "adg_w": "ADG(w)",
+    "gadg": "GADG",
+    "gadg_w": "GADG(w)",
     "mdg": "MDG",
     "mdg_w": "MDG(w)",
     "gain": "Gain",
@@ -60,7 +66,8 @@ header_aliases = {
     "sortino_ratio_w": "Sortino(w)",
     "sterling_ratio": "Sterling",
     "sterling_ratio_w": "Sterling(w)",
-    "rsquared": "R²"
+    "rsquared": "R²",
+    "time_in_market_percent": "TiM %"
 }
 
 def get_current_running_config():
@@ -120,8 +127,12 @@ for key, values in column_stats.items():
     try:
         col_minmax[key] = (min(vals), max(vals))
     except Exception as e:
+        for v in values:
+            if v[1] is None:
+                print(v[0], " is having issues")
         col_minmax[key] = (min(vals), max(vals))
         print(e)
+
 # Function for color interpolation
 def interpolate_color(val, min_val, max_val, reverse=False):
     if max_val == min_val:
@@ -161,37 +172,38 @@ def build_colored_table(selected_rows, headers, title):
 
 
 # Function to assign points based on relative distance to first place
-def assign_points_based_on_distance_to_first_place(values, points_per_rank, reverse=False):
-    if not reverse:
-        values = sorted(values, key=lambda x: x[1], reverse=True)  # High is better
-    else:
-        values = sorted(values, key=lambda x: x[1])  # Low is better
+def assign_points_based_on_distance_to_first_place(values, max_points=100, reverse=False):
+    if not values:
+        return
 
-    best_value = values[0][1]  # Get the best value (first place)
-    worst_value = values[-1][1] 
+    values = sorted(values, key=lambda x: x[1], reverse=not reverse)
+
+    best_value = values[0][1]
+    worst_value = values[-1][1]
     range_of_values = best_value - worst_value
-    # Calculate the max possible points for this metric
-    max_points = points_per_rank.get(1, 0)  # Maximum points for first place
 
-    # Assign points based on relative distance to first place
     for name, val in values:
-        # Calculate the distance to the best value
         if range_of_values == 0:
-            distance = 0
+            points = max_points
         else:
-            distance = abs(val - best_value)/(range_of_values)
+            if not reverse:
+                distance = (best_value - val) / range_of_values
+            else:
+                distance = (val - best_value) / range_of_values
+            points = max(0, max_points * (1 - distance))
         
-        # Scale the points based on distance
-        points = max(0, max_points * (1 - distance) ) # Scale factor can be adjusted
         total_points[name] += points
+
 
 # Track points
 total_points = {row["name"]: 0 for row in rows}
 
 # Compute points based on relative distance to first place for each metric
 for key, values in column_stats.items():
+    if "_w" in key:
+        continue
     reverse = key in lower_better_metrics
-    points_per_rank = elite_points_per_rank if key in elite_metrics else primary_points_per_rank if key in priority_metrics else secondary_points_per_rank
+    points_per_rank = top_ranking_points
     
     assign_points_based_on_distance_to_first_place(values, points_per_rank, reverse)
     # total_points_sorted = sorted(total_points.items(), key=lambda x: x[1], reverse=False)
@@ -202,6 +214,7 @@ for key, values in column_stats.items():
 # Sort final ranking by total points
 total_points_sorted = sorted(total_points.items(), key=lambda x: x[1], reverse=True)
 reverse_total_points_sorted = sorted(total_points.items(), key=lambda x: x[1], reverse=False)
+
 
 # ✅ Delete directories with 0 score
 for name, points in total_points_sorted:
@@ -232,10 +245,10 @@ for name, points in total_points_sorted:
 # Thematic metric groups
 def build_thematic_tables():
     tables = []
-    performance_metrics = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
-    risk_metrics = ["drawdown_worst", "drawdown_worst_mean_1pct", "expected_shortfall_1pct", "loss_profit_ratio", "loss_profit_ratio_w", "rsquared"]
-    position_metrics = ["position_held_hours_mean", "positions_held_per_day", "position_unchanged_hours_max"]
-    ratio_metrics = ["sharpe_ratio", "sharpe_ratio_w", "calmar_ratio", "calmar_ratio_w", "omega_ratio", "omega_ratio_w", "sortino_ratio", "sortino_ratio_w", "sterling_ratio", "sterling_ratio_w"]
+    performance_metrics = ["adg", "gadg" ,"mdg", "gain"]
+    risk_metrics = ["drawdown_worst", "drawdown_worst_mean_1pct", "expected_shortfall_1pct", "loss_profit_ratio", "rsquared"]
+    position_metrics = ["position_held_hours_mean", "positions_held_per_day", "position_unchanged_hours_max", "time_in_market_percent"]
+    ratio_metrics = ["sharpe_ratio", "calmar_ratio","omega_ratio", "sortino_ratio","sterling_ratio"]
     priority_table_metrics = elite_metrics + priority_metrics
 
     tables.append(build_colored_table(rows, performance_metrics, "📊 Performance Metrics"))
@@ -247,36 +260,39 @@ def build_thematic_tables():
     return tables
 
 # Loop for interactivity
+from rich.panel import Panel
+from rich.live import Live
+from rich.align import Align
+from rich.layout import Layout
+
 def interactive_display():
     tables = build_thematic_tables()
+    
     while True:
-        console.print("[bold green]Choose a table to display:[/bold green]")
-        console.print("1 - Performance Metrics")
-        console.print("2 - Risk Metrics")
-        console.print("3 - Position Holding Metrics")
-        console.print("4 - Ratio Metrics")
-        console.print("5 - Priority Metrics")
-        console.print("6 - Final Points-Based Ranking")
-        console.print("7 - Top 3 Strategies (Priority Metrics)")
-        console.print("q - Quit")
+        menu_panel = Panel.fit(
+            Align.left(
+                "[bold green]Choose a table to display:[/bold green]\n\n"
+                "1 - Performance Metrics\n"
+                "2 - Risk Metrics\n"
+                "3 - Position Holding Metrics\n"
+                "4 - Ratio Metrics\n"
+                "5 - Priority Metrics\n"
+                "6 - Final Points-Based Ranking\n"
+                "7 - Top 3 Strategies (Priority Metrics)\n"
+                "q - Quit"
+            ),
+            title="📋 Menu",
+            border_style="blue"
+        )
+        console.print(menu_panel)
 
         choice = Prompt.ask("Enter choice", default="1")
+        console.clear()
 
-        if choice == "1":
-            table = tables[0]
+        if choice in {"1", "2", "3", "4", "5"}:
+            table = tables[int(choice) - 1]
             console.print(table)
-        elif choice == "2":
-            table = tables[1]
-            console.print(table)
-        elif choice == "3":
-            table = tables[2]
-            console.print(table)
-        elif choice == "4":
-            table = tables[3]
-            console.print(table)
-        elif choice == "5":
-            table = tables[4]
-            console.print(table)
+
         elif choice == "6":
             ranking_table = Table(show_header=True, header_style="bold green", title="🏆 Final Points-Based Ranking")
             ranking_table.add_column("Name", style="bold yellow")
@@ -288,17 +304,22 @@ def interactive_display():
                     name_str = f"[bold yellow on blue]{name_str}[/]"
                 ranking_table.add_row(name_str, str(points))
 
-            console.print(ranking_table)
+            panel = Panel(ranking_table, title="📊 Rankings", border_style="magenta")
+            console.print(panel)
+
         elif choice == "7":
             top3_names = [name for name, _ in total_points_sorted[:3]]
             top3_rows = [row for row in rows if row["name"] in top3_names]
             top3_table = build_colored_table(top3_rows, elite_metrics + priority_metrics, "🌟 Top 3 Strategies (Priority Metrics)")
+            panel = Panel(top3_table, title="🌟 Top 3 Strategies", border_style="green")
+            console.print(panel)
 
-            console.print(top3_table)
         elif choice.lower() == "q":
+            console.print(Panel("👋 Exiting... Bye!", style="bold red", border_style="red"))
             break
         else:
-            console.print("[bold red]Invalid choice! Please enter a valid option.[/bold red]")
+            console.print(Panel("[bold red]Invalid choice! Please enter a valid option.[/bold red]", border_style="red"))
+
 
 console.clear()
 interactive_display()

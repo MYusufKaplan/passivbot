@@ -99,6 +99,8 @@ if __name__ == "__main__":
         colorful_log(f"🔍 Interpreting '{input_arg}' as run number...")
         run_number = str(input_arg).zfill(6)
         csv_file = f"/home/myusuf/Projects/passivbot/backtests/optimizer/live/{run_number}/balance_and_equity.csv"
+        if not os.path.isfile(csv_file):
+            csv_file = f"/home/myusuf/Projects/passivbot/backtests/optimizer/extremes/{run_number}/balance_and_equity.csv"
         colorful_log(f"📂 Resolved path: {csv_file}")
     else:
         csv_file = input_arg
