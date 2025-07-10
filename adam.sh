@@ -6,7 +6,7 @@ read CONFIG_NUM
 echo -e "📝 Enter output text (e.g. test1): "
 read OUTPUT_TEXT
 
-SOURCE_FILE="/home/myusuf/Projects/passivbot/configs/optimization/000${CONFIG_NUM}.json"
+SOURCE_FILE="/home/myusuf/Projects/passivbot/configs/optimization/00${CONFIG_NUM}.json"
 TEMPLATE_FILE="/home/myusuf/Projects/passivbot/configs/optimize.json"
 OUTPUT_FILE="/home/myusuf/Projects/passivbot/configs/optimize.json.${OUTPUT_TEXT}"
 

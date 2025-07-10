@@ -57,7 +57,7 @@ echo -e "${CYAN}📄 Latest optimize result file: ${YELLOW}$latest_optimize_resu
 # ✂️ Trim it
 trimmed_optimize_result="$BASEDIR/optimize_results/finalists.txt"
 first_line=$(head -n 1 "$BASEDIR/optimize_results/$latest_optimize_result")
-tail -n 5000 "$BASEDIR/optimize_results/$latest_optimize_result" > "$trimmed_optimize_result"
+tail -n 50000 "$BASEDIR/optimize_results/$latest_optimize_result" > "$trimmed_optimize_result"
 echo "$first_line" | cat - "$trimmed_optimize_result" > temp && mv temp "$trimmed_optimize_result"
 echo -e "${CYAN}✂️ Trimmed optimize result created: ${YELLOW}$trimmed_optimize_result${NC} ✂️"
 

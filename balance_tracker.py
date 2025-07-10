@@ -5,7 +5,6 @@ import time
 from datetime import datetime, timezone, timedelta
 
 CSV_PATH = "/home/ubuntu/passivbot/balance.csv"
-# CSV_PATH = "/home/myusuf/Projects/passivbot/balance.csv"
 TARGET_TRY = 209000
 SLEEP_SECONDS = 10
 

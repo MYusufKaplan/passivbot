@@ -7,6 +7,7 @@ import argparse
 import multiprocessing
 import subprocess
 import mmap
+import math
 from multiprocessing import Queue, Process
 from collections import defaultdict
 from backtest import (
@@ -585,6 +586,8 @@ class Evaluator:
         table.add_column("Δ", justify="right")
         table.add_column("Contribution", justify="right")
         table.add_column("Modifier", justify="right")
+        table.add_column("NPos", justify="right")
+        table.add_column("%", justify="right")
 
         # ideal_targets = {
         #     "Gain": 10000,
@@ -708,7 +711,9 @@ class Evaluator:
                 current_text,
                 f"{delta:+10.5f}",
                 contribution_text,
-                modifier_text
+                modifier_text,
+                f"{math.floor(individual[19])}",
+                f"{individual[20]:>10.5f}"
             )
 
         # Display the table
