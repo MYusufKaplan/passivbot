@@ -5,11 +5,13 @@ edition = "2021"
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "fat"
 codegen-units = 1
 strip = "none"
 panic = "abort"
 incremental = false
+overflow-checks = false
+debug = false
 
 [lib]
 name = "passivbot_rust"
@@ -19,6 +21,6 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.21.2", features = ["extension-module"] }
 ndarray = "0.15.6"
 numpy = "0.21.0"
-memmap = "0.7.0"
+memmap2 = "0.9.4"  # Much faster than memmap 0.7.0, has populate() method
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -28,6 +28,8 @@ pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
     pub coins: Vec<String>,
+    pub max_days_without_position: usize,
+    pub max_days_with_stale_position: usize,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -276,6 +278,7 @@ pub struct Analysis {
 
     pub rsquared: f64,
     pub time_in_market_percent: f64,
+    pub bankruptcy_timestamp: Option<usize>,
 }
 
 impl Default for Analysis {
@@ -291,8 +294,8 @@ impl Default for Analysis {
             expected_shortfall_1pct: 0.0,
             calmar_ratio: 0.0,
             sterling_ratio: 0.0,
-            drawdown_worst: 1.0,
-            drawdown_worst_mean_1pct: 1.0,
+            drawdown_worst: 2.0,
+            drawdown_worst_mean_1pct: 2.0,
             equity_balance_diff_neg_max: 1.0,
             equity_balance_diff_neg_mean: 1.0,
             equity_balance_diff_pos_max: 1.0,
@@ -314,7 +317,8 @@ impl Default for Analysis {
             sterling_ratio_w: 0.0,
             loss_profit_ratio_w: 1.0,
             rsquared: 0.0,
-            time_in_market_percent: 0.0
+            time_in_market_percent: 0.0,
+            bankruptcy_timestamp: None,
         }
     }
 }

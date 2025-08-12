@@ -11,7 +11,7 @@ use crate::types::{
     Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Order,
     OrderBook, Position, StateParams, TrailingPriceBundle,
 };
-use memmap::MmapOptions;
+use memmap2::MmapOptions;
 use ndarray::{Array1, Array2, Array3, Array4, ArrayBase, ArrayD, ArrayView, ShapeBuilder};
 use numpy::{
     IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyReadonlyArray2, PyReadonlyArray3,
@@ -118,7 +118,7 @@ pub fn run_backtest(
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
         let (analysis_usd, analysis_btc) =
-            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral);
+            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral, backtest.bankruptcy_timestamp);
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
@@ -176,6 +176,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
         maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
         coins: extract_value(dict, "coins").unwrap_or_default(),
+        max_days_without_position: extract_value(dict, "max_days_without_position").unwrap_or(1),
+        max_days_with_stale_position: extract_value(dict, "max_days_with_stale_position").unwrap_or(7),
     })
 }
 
