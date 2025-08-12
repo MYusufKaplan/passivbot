@@ -46,9 +46,11 @@ NEW_BOUNDS=$(jq '{
   }
 }' "$SOURCE_FILE")
 
-# Merge NEW_BOUNDS into the template, replacing "optimize.bounds"
+# Merge NEW_BOUNDS into the template, replacing "optimize.bounds" and setting iters to 1
 FINAL_JSON=$(jq --argjson new_bounds "$NEW_BOUNDS" '
-  .optimize.bounds = $new_bounds.optimize.bounds
+  .optimize.bounds = $new_bounds.optimize.bounds |
+  .optimize.iters = 1 |
+  .optimize.population_size = 1
 ' "$TEMPLATE_FILE")
 
 # Save the final JSON

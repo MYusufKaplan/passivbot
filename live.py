@@ -60,7 +60,11 @@ rows, column_stats = [], {}
 def assign_points_by_rank(values, reverse=False):
     if not values:
         return
-    sorted_vals = sorted(values, key=lambda x: x[1], reverse=not reverse)
+    # Filter out None values before sorting
+    filtered_values = [(name, val) for name, val in values if val is not None]
+    if not filtered_values:
+        return
+    sorted_vals = sorted(filtered_values, key=lambda x: x[1], reverse=not reverse)
     n = len(sorted_vals)
     for i, (name, _) in enumerate(sorted_vals):
         if name in ignore_names:
@@ -98,7 +102,7 @@ def load_analysis_data():
     rows.sort(key=lambda x: x["name"])
     col_minmax = {}
     for k, v in column_stats.items():
-        vv = [x[1] for x in v]
+        vv = [x[1] for x in v if x[1] is not None]
         if vv:
             col_minmax[k] = (min(vv), max(vv))
             # Calculate min/max for 'others' metrics which are added from config.json, not in column_stats

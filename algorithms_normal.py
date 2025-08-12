@@ -248,7 +248,6 @@ import os
 import pickle
 import datetime
 import time
-import json
 import numpy as np
 from collections import deque
 from rich.console import Console
@@ -460,7 +459,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
     delta = 0.015  # base change per update
     fitnesses = []
     gen_runtimes = []
-    stagnition = 0
+    stagnation = 0
 
 
     log_message(f"Starting Generational Loop", emoji="🧬")
@@ -507,7 +506,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
         #     mutpb = max(MIN_MUTPB, mutpb - scaled_delta)
         #     mut_status = f"{GREEN}⬇️ Decreased by {scaled_delta:.4f}{RESET}"
 
-        # mutpb = 0.2
+        mutpb = 0.2
         cxpb = 1 - mutpb
 
 
@@ -538,7 +537,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
 
         # 🎯 Stagnation-based random injection: add new individuals every 20 generations of stagnation
         if stagnation > 0 and stagnation % 10 == 0:
-            num_to_inject = max(1, int(mu * 0.1))  # inject 10% new individuals
+            num_to_inject = max(1, int(mu * 0.2))  # inject 10% new individuals
             log_message(f"{RED}🚨 Fitness stagnation detected ({stagnation} gens)! Injecting {num_to_inject} random individuals{RESET}")
             
             # Generate new random individuals and evaluate them
@@ -570,15 +569,17 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
         log_message(f"Elite preserved with fitness: {best_ind.fitness.values[0]}", emoji="🏅")
         # evaluate_solution((evaluator, best_ind, True))
 
+        # Store the previous best fitness before updating record
         old_best = record["min"][0]
 
-
+        # Update record with new population statistics
         record = stats.compile(population) if stats is not None else {}
 
+        # Track stagnation: reset if we found a better fitness, otherwise increment
         if record["min"][0] < old_best:
-            stagnition = 0
+            stagnation = 0
         else:
-            stagnition += 1
+            stagnation += 1
 
         # logbook.record(gen=gen, nevals=len(invalid_ind), **record)
         if verbose:
@@ -597,7 +598,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
                 🧜‍♂️ Diversity: {current_div:.4e}
                 🧮 Threshold: {threshold:.4e}
                 🧬 Mutation: {mutpb:.2f} ({mut_status})
-                ⏱️ Stagnition: {stagnition}
+                ⏱️ Stagnation: {stagnation}
                 🌍 Global Best fitness: {best_fitness_so_far:.6e}
                 🎖️ Generational Best fitness: {generational_best:.6e}
                 📊 Mean fitness: {mean_fitness:.6e}

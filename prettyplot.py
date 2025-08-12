@@ -18,7 +18,7 @@ def calculate_r2(actual, predicted):
 def colorful_log(msg, emoji="✨"):
     print(f"{emoji} {msg}")
 
-def plot_balance_equity(csv_file,run_number,start_time):
+def plot_balance_equity(csv_file, run_number, start_time, output_file=None, save_only=False):
     colorful_log("📖 Reading CSV file...")
     df = pd.read_csv(csv_file)
 
@@ -30,7 +30,7 @@ def plot_balance_equity(csv_file,run_number,start_time):
 
     fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
 
-    STARTING_BALANCE = 1000
+    STARTING_BALANCE = 10000
     df['balance'] = df['balance'] / STARTING_BALANCE
     df['equity'] = df['equity'] / STARTING_BALANCE
 
@@ -84,13 +84,43 @@ def plot_balance_equity(csv_file,run_number,start_time):
     plt.xlabel("Date")
 
     plt.tight_layout()
-    colorful_log("📊 Displaying the plots!")
-    plt.show()
+    
+    if save_only or output_file:
+        # Save mode
+        if not output_file:
+            # Generate default filename
+            if run_number != "N/A":
+                output_file = f"balance_equity_plot_{run_number}.png"
+            else:
+                output_file = "balance_equity_plot.png"
+        
+        colorful_log(f"💾 Saving plot to {output_file}")
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        colorful_log(f"✅ Plot saved as {output_file}")
+        plt.close()
+    else:
+        # Display mode (default)
+        try:
+            colorful_log("📊 Displaying the plot!")
+            plt.show()
+        except Exception as e:
+            colorful_log(f"⚠️  Cannot display plot (no GUI available): {e}")
+            # Fallback to saving
+            if run_number != "N/A":
+                output_file = f"balance_equity_plot_{run_number}.png"
+            else:
+                output_file = "balance_equity_plot.png"
+            colorful_log(f"💾 Falling back to saving plot as {output_file}")
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            colorful_log(f"✅ Plot saved as {output_file}")
+            plt.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot Balance and Equity from a CSV file.")
     parser.add_argument("csv_file_or_number", help="Path to the CSV file or run number (e.g. 48)")
     parser.add_argument("--start-date", default="2023-01-01", help="Start date in YYYY-MM-DD format (default: 2023-01-01)")
+    parser.add_argument("--output", "-o", help="Output filename for the plot (default: auto-generated)")
+    parser.add_argument("--save", action="store_true", help="Save plot to file instead of displaying")
     args = parser.parse_args()
 
     # Check if input is a number, then resolve to path
@@ -119,4 +149,4 @@ if __name__ == "__main__":
         colorful_log(f"❌ Invalid start date format: {args.start_date}. Use YYYY-MM-DD.", emoji="🚨")
         sys.exit(1)
 
-    plot_balance_equity(csv_file, run_number, start_date)
+    plot_balance_equity(csv_file, run_number, start_date, args.output, args.save)

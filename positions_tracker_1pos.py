@@ -349,8 +349,7 @@ def build_dashboard(visual_symbol, symbol, position, current_price, orders, bala
     info = Table.grid(padding=0)
     info.add_row(f"[bold]📈 Symbol:[/] {visual_symbol}")
     info.add_row(f"[bold]🎯 Position:[/] {position['contracts']} contracts")
-    info.add_row(f"[bold]💰 Current Price:[/] {price_str}")
-    # info.add_row(f"[bold]💰 Current Price:[/] {price_str} • {changes_str}")
+    info.add_row(f"[bold]💰 Current Price:[/] {price_str} • {changes_str}")
     info.add_row(f"[bold]🧮 Unrealized PnL:[/] [{pnl_color}]{unrealized_pnl:.5f} ({(unrealized_pnl * try_price):.5f}₺)[/{pnl_color}]")
     info.add_row(f"[bold]✅ Realized PnL:[/] {realized_pnl:.5f} ({(realized_pnl * try_price):.5f}₺)")
     info.add_row(f"[bold]⚖️ Break-Even Price:[/] {break_even_price:.5f}" if break_even_price else "[bold]⚖️ Break-Even Price:[/] —")
@@ -407,14 +406,20 @@ def main():
     first_run = True
     previous_positions = {}
     previous_orders = {}
-    current_position_index = 0
-    last_position_switch = time.time()
-    position_display_duration = 5  # seconds
 
     with Live(console=console, refresh_per_second=1, screen=False) as live:
+        volume_panel = None
+        info_panel = None
+        balance_panel = None
+        timer_panel = None
+        header = None
+        progress_renderables = None
+        previous_positions = {}
+
         while True:
             try:
                 positions = fetch_active_positions()
+
 
                 if not positions:
                     idle_time += 1
@@ -426,88 +431,59 @@ def main():
                     continue
 
                 idle_time = 0
-                
-                # Handle position switching for slideshow
-                current_time = time.time()
-                if len(positions) > 1 and (current_time - last_position_switch) >= position_display_duration:
-                    current_position_index = (current_position_index + 1) % len(positions)
-                    last_position_switch = current_time
-                
-                # Ensure index is within bounds
-                if current_position_index >= len(positions):
-                    current_position_index = 0
-
-                # Get current position to display
-                position = positions[current_position_index]
-                symbol = position['symbol']
-                visual_symbol = position['symbol'].split(":")[0]
-                
-                # Process all positions for sound detection but only display current one
-                for pos in positions:
-                    pos_symbol = pos['symbol']
-                    pos_orders = fetch_orders(pos_symbol)
-                    
+                dashboards = []
+                for position in positions:
+                    symbol = position['symbol']
+                    visual_symbol = position['symbol'].split(":")[0]
+                    current_price = float(gate.fetch_ticker(symbol)['last'])
+                    orders = fetch_orders(symbol)
+                    balance = gate.fetch_balance()
+                    price_changes = get_price_changes(symbol)
                     # Detect state changes — skip sounds on first loop
-                    prev_pos = previous_positions.get(pos_symbol)
-                    prev_orders = previous_orders.get(pos_symbol, [])
+                    prev_pos = previous_positions.get(symbol)
+                    prev_orders = previous_orders.get(symbol, [])
 
                     if not first_run:
                         # Position start
-                        if not prev_pos and pos:
+                        if not prev_pos and position:
                             play_sound("sounds/position_start.wav")
 
                         # Position end
-                        if prev_pos and not pos:
+                        if prev_pos and not position:
                             play_sound("sounds/postion_end.wav")
 
-                        # New sell order
+                        # New sell order (you can be more specific if needed)
                         prev_sell_ids = {o["id"] for o in prev_orders if o["side"].lower() == "sell"}
-                        new_sell_ids = {o["id"] for o in pos_orders if o["side"].lower() == "sell"}
+                        new_sell_ids = {o["id"] for o in orders if o["side"].lower() == "sell"}
                         if new_sell_ids - prev_sell_ids:
                             play_sound("sounds/sell.wav")
 
                         # Removed buy order
                         prev_buy_ids = {o["id"] for o in prev_orders if o["side"].lower() == "buy"}
-                        new_buy_ids = {o["id"] for o in pos_orders if o["side"].lower() == "buy"}
+                        new_buy_ids = {o["id"] for o in orders if o["side"].lower() == "buy"}
                         if prev_buy_ids - new_buy_ids:
                             play_sound("sounds/buy.wav")
 
                     # Save state for next loop
-                    previous_positions[pos_symbol] = pos
-                    previous_orders[pos_symbol] = pos_orders
+                    previous_positions[symbol] = position
+                    previous_orders[symbol] = orders
 
-                # Display current position
-                current_price = float(gate.fetch_ticker(symbol)['last'])
-                orders = fetch_orders(symbol)
-                balance = gate.fetch_balance()
-                price_changes = get_price_changes(symbol)
+                    volume_panel, info_panel, balance_panel, timer_panel, header, progress_renderables = build_dashboard(
+                        visual_symbol, symbol, position, current_price, orders, balance, price_changes
+                    )
 
-                volume_panel, info_panel, balance_panel, timer_panel, header, progress_renderables = build_dashboard(
-                    visual_symbol, symbol, position, current_price, orders, balance, price_changes
-                )
-
-                # Add position counter if multiple positions
-                position_counter = ""
-                if len(positions) > 1:
-                    remaining_time = position_display_duration - (current_time - last_position_switch)
-                    position_counter = f" [{current_position_index + 1}/{len(positions)}] • Next in {remaining_time:.0f}s"
-
-                layout = Group(
-                    header,
-                    *progress_renderables,
-                    info_panel,
-                    balance_panel,
-                    volume_panel,
-                    timer_panel
-                )
-                
-                panel_title = f"📍 {visual_symbol}{position_counter}"
-                dashboard_panel = Panel(layout, title=panel_title, border_style="cyan", expand=True)
-                live.update(dashboard_panel)
-                
+                    layout = Group(
+                        header,
+                        *progress_renderables,
+                        info_panel,
+                        balance_panel,
+                        volume_panel,
+                        timer_panel
+                    )
+                    
+                    dashboards.append(Panel(layout, title=f"📍 {visual_symbol}", border_style="cyan", expand=False))
+                live.update(Columns(dashboards, expand=True))
                 first_run = False
-                time.sleep(1)  # Update every second
-                
             except Exception as e:
                 print(f"Error: {e}")
                 time.sleep(5)

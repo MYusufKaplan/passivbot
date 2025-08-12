@@ -44,6 +44,7 @@ import traceback
 import json
 import pprint
 from deap import base, creator, tools, algorithms
+import alternatives
 from contextlib import contextmanager
 import tempfile
 import time
@@ -360,9 +361,11 @@ class Evaluator:
                 self.backtest_params[exchange],
             )
             analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
+            # Store equity length for bankruptcy inference
+            analyses[exchange]['equity_length'] = len(equities_usd)
 
         analyses_combined = self.combine_analyses(analyses)
-        w_0, w_1 = self.calc_fitness(analyses_combined, individual)
+        w_0, w_1 = self.calc_fitness(analyses_combined, analyses, individual)
         analyses_combined.update({"w_0": w_0, "w_1": w_1})
 
         data = {
@@ -380,7 +383,26 @@ class Evaluator:
         keys = analyses[next(iter(analyses))].keys()
         for key in keys:
             values = [analysis[key] for analysis in analyses.values()]
-            if not values or any([x == np.inf for x in values]) or any([x is None for x in values]):
+            
+            # Special handling for bankruptcy_timestamp - only set if actually bankrupt
+            if key == "bankruptcy_timestamp":
+                # Find the first non-None bankruptcy timestamp (if any)
+                bankruptcy_timestamps = [v for v in values if v is not None]
+                if bankruptcy_timestamps:
+                    # If any exchange went bankrupt, use the earliest bankruptcy timestamp
+                    analyses_combined[f"{key}_mean"] = min(bankruptcy_timestamps)
+                    analyses_combined[f"{key}_min"] = min(bankruptcy_timestamps)
+                    analyses_combined[f"{key}_max"] = min(bankruptcy_timestamps)
+                    analyses_combined[f"{key}_std"] = 0.0
+                else:
+                    # No bankruptcy occurred - keep as None
+                    analyses_combined[f"{key}_mean"] = None
+                    analyses_combined[f"{key}_min"] = None
+                    analyses_combined[f"{key}_max"] = None
+                    analyses_combined[f"{key}_std"] = None
+                    
+
+            elif not values or any([x == np.inf for x in values]) or any([x is None for x in values]):
                 analyses_combined[f"{key}_mean"] = 0.0
                 analyses_combined[f"{key}_min"] = 0.0
                 analyses_combined[f"{key}_max"] = 0.0
@@ -401,12 +423,87 @@ class Evaluator:
 
     
     
-    def calc_fitness(self, analyses_combined,individual,verbose=True):
-        modifier = 0.0
+    def calc_fitness(self, analyses_combined, analyses, individual, verbose=True):
+        # Check for bankruptcy first - look for bankruptcy_timestamp in any of the analysis results
         keys = self.config["optimize"]["limits"]
-        i = len(keys) + 1
-        # i = 5
+
+        bankruptcy_timestamp = None
+        # Check for bankruptcy in any of the bankruptcy timestamp keys
+        for suffix in ["_mean", "_min", "_max"]:
+            key = f"bankruptcy_timestamp{suffix}"
+            if key in analyses_combined and analyses_combined[key] is not None:
+                bankruptcy_timestamp = int(analyses_combined[key])
+                break
+        
+        # Workaround: If bankruptcy_timestamp is None but we suspect bankruptcy occurred,
+        # infer it from the equity series length
+        if bankruptcy_timestamp is None:
+            # Get actual number of timesteps from hlcvs_shapes
+            first_exchange = next(iter(self.hlcvs_shapes))
+            n_timesteps = self.hlcvs_shapes[first_exchange][0]  # First dimension is timesteps
+            
+            # Check if any exchange has significantly fewer equity data points than expected
+            # This would indicate the backtest stopped early due to bankruptcy
+            for exchange_name, analysis_data in analyses.items():
+                if 'equity_length' in analysis_data:
+                    equity_length = analysis_data['equity_length']
+                    if equity_length < (n_timesteps - 10):  # 10 timestep buffer as suggested
+                        # Infer bankruptcy timestamp from the equity length
+                        bankruptcy_timestamp = equity_length
+                        break
+        
+        if bankruptcy_timestamp is not None:
+            # Get actual number of timesteps from hlcvs_shapes
+            # Use the first exchange's shape as they should all be the same
+            first_exchange = next(iter(self.hlcvs_shapes))
+            n_timesteps = self.hlcvs_shapes[first_exchange][0]  # First dimension is timesteps
+            
+            # Calculate penalty that heavily penalizes early bankruptcies
+            # The earlier the bankruptcy, the higher the penalty
+            progress_ratio = bankruptcy_timestamp / n_timesteps  # 0.0 = immediate bankruptcy, 1.0 = end
+            
+            # Base penalty that scales exponentially with how early the bankruptcy occurred
+            # Early bankruptcies (low progress_ratio) get much higher penalties
+            base_penalty = 10 ** (len(keys) + 5)  # Large base penalty
+            
+            # Exponential scaling: earlier bankruptcies get exponentially higher penalties
+            # progress_ratio of 0.1 (10% through) gets ~10x higher penalty than 0.9 (90% through)
+            early_bankruptcy_multiplier = (1.0 - progress_ratio) ** 2 + 0.1  # Ensures minimum multiplier of 0.1
+            
+            penalty = base_penalty * early_bankruptcy_multiplier
+            
+            # Skip logs and table for bankrupt strategies
+            return penalty, penalty
+        
+        # Check for high drawdown early to skip table generation
         prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
+        drawdown = analyses_combined.get(f"{prefix}drawdown_worst_max", 0)
+        equity_diff = analyses_combined.get(f"{prefix}equity_balance_diff_neg_max_max", 0)
+        
+        # Skip table and logs for high drawdown strategies (including no-trade strategies)
+        if drawdown >= 1.0 or equity_diff >= 1.0:
+            penalty = 10**(len(keys) + 5)  # Large penalty for high drawdown
+            return penalty, penalty
+        
+        # Debug: Log when we have a normal strategy that should show a table
+        if verbose:
+            print(f"✅ NORMAL STRATEGY: drawdown={drawdown:.3f}, equity_diff={equity_diff:.3f} - showing table")
+        
+        # Check if we're in a cron environment or non-interactive shell
+        import sys
+        is_interactive = sys.stdout.isatty() and sys.stderr.isatty()
+        
+        # Force colors even in non-interactive environments like cron
+        console = Console(
+            force_terminal=True, 
+            no_color=False, 
+            log_path=False, 
+            width=159,
+            color_system="truecolor",  # Force truecolor support
+            legacy_windows=False
+        )
+        modifier = 0.0
+        # i = 5
 
         # Step 1: Initialize min/max values
         min_contribution = float('inf')
@@ -458,11 +555,12 @@ class Evaluator:
             "equity_balance_diff_pos_mean": "E/B Diff + mean",
             "time_in_market_percent": "TiM %"
         }
-
+        i = len(keys) + 1
+        
         # Step 2: Single pass to process and gather data
         for key in keys:
-            keym = key.replace("lower_bound_", "") + "_max"
-            myKey = key.replace("lower_bound_", "")
+            keym = key.replace("lower_bound_", "").split("-")[0] + "_max"
+            myKey = key.replace("lower_bound_", "").split("-")[0]
             if keym not in analyses_combined:
                 keym = prefix + keym
                 assert keym in analyses_combined, f"❌ malformed key: {keym}"
@@ -523,12 +621,15 @@ class Evaluator:
 
 
             # Calculate normalized error based on delta and target
-            weight = normalize_delta(delta,current,target,expect_higher)
-            contribution = (10 ** i) * weight
-            # contribution = normalize_delta(delta,current,target,expect_higher)
+            # contribution = (10 ** i) * normalize_delta(delta,current,target,expect_higher)
+            # modifier += contribution
+            # i-=1
 
-            i -= 1
-            modifier += contribution
+            contribution = (10 ** 1) * normalize_delta(delta,current,target,expect_higher)
+            if modifier == 0:
+                modifier = contribution
+            elif contribution != 0:
+                modifier = modifier * contribution
 
             # Update min/max for contribution and modifier
             min_contribution = min(min_contribution, contribution)
@@ -548,7 +649,8 @@ class Evaluator:
             })
 
         def log_modulus(x):
-            return np.sign(x) * np.log10(1 + abs(x))
+            x = np.asarray(x, dtype=np.float64)
+            return np.sign(x) * np.log10(1 + np.abs(x))
         def rgb_to_hex(rgb):
             return "#{:02x}{:02x}{:02x}".format(*rgb)
 
@@ -569,12 +671,12 @@ class Evaluator:
             g = int(GREEN_RGB[1] + norm_value * (RED_RGB[1] - GREEN_RGB[1]))
             b = int(GREEN_RGB[2] + norm_value * (RED_RGB[2] - GREEN_RGB[2]))
 
-            return rgb_to_hex((r,g,b))
+            # Use rgb() format instead of hex for better cron compatibility
+            return f"rgb({r},{g},{b})"
 
         all_zero_contributions = all(r['contribution'] == 0.0 for r in results)
 
         i = len(keys) + 1
-        console = Console(force_terminal=True, no_color=False, log_path=False, width=159)
 
         # Step 4: Print the results with colorized values
         table = Table(show_header=True, header_style="bold magenta", title="📊 Optimization Status")
@@ -633,17 +735,19 @@ class Evaluator:
         # }
         scaling_values = {
             "Gain":             2,
-            "DD Worst":         2,
+            # "DD Worst":         2,
             # "DD 1%":            2,
+            "DD Worst":         -99,
+            "DD 1%":            -99,
             # "E/B Diff - max":   2,
             # "E/B Diff - mean":  2,
             # "E/B Diff + max":   1,
             # "E/B Diff + mean":  1,
             "R²":               4,
-            "TiM %":            2, 
+            # "TiM %":            2, 
             # "Sharpe":           4,
             # "LPR":              2,
-            "Hrs/Pos":          1,
+            # "Hrs/Pos":          1,
             # "Pos/Day":          3,
             # "Unchg Max":        3,
             # "ADG":              5,
@@ -718,47 +822,31 @@ class Evaluator:
 
         # Display the table
         console.print(table)
+        # console.print(f"Final Score: {(modifier) ** (1/(len(results)))}")
 
 
-        drawdown = analyses_combined.get(f"{prefix}drawdown_worst_max", 0)
-        equity_diff = analyses_combined.get(f"{prefix}equity_balance_diff_neg_max_max", 0)
         npos = individual[19]
 
-        # TODO Here's the min 2 npos
-        # if npos < 2:
-        #     modifier = modifier * 10**(len(keys) + 5)
-        #     print(f"~⚠️ Less than 2 positions")
-        if drawdown >= 1.0 or equity_diff >= 1.0:
-            if verbose:
-                print(f"~⚠️ Drawdown or Equity cap hit! Drawdown: {drawdown:.2f}, Equity Diff: {equity_diff:.2f}")
-            w_0 = w_1 = modifier * 10**(len(keys) + 5)
-        else:
-            scoring_keys = self.config["optimize"]["scoring"]
-            assert len(scoring_keys) == 2, f"~❌ Expected 2 fitness scoring keys, got {len(scoring_keys)}"
+        scoring_keys = self.config["optimize"]["scoring"]
+        assert len(scoring_keys) == 2, f"~❌ Expected 2 fitness scoring keys, got {len(scoring_keys)}"
 
-            scores = []
-            for sk in scoring_keys:
-                skm = f"{sk}_mean"
+        scores = []
+        for sk in scoring_keys:
+            skm = f"{sk}_mean"
+            if skm not in analyses_combined:
+                skm = prefix + skm
                 if skm not in analyses_combined:
-                    skm = prefix + skm
-                    if skm not in analyses_combined:
-                        raise Exception(f"~❌ Invalid scoring key: {sk}")
+                    raise Exception(f"~❌ Invalid scoring key: {sk}")
 
-                # score_value = modifier - analyses_combined[skm]
-                score_value = modifier
-                scores.append(score_value)
-
-                if verbose:
-                    print(f"~🎯 [{skm}] Modifier: {modifier:.5e}, Value: {analyses_combined[skm]:.5f}, Score: {score_value:.5e}")
+            # score_value = modifier - analyses_combined[skm]
+            score_value = modifier
+            scores.append(score_value)
 
             # if verbose:
-            #     print(f"🥇 Final Scores: {scores[0]:.5f}, {scores[1]:.5f}")
+                # print(f"~🎯 [{skm}] Modifier: {modifier:.5e}, Value: {analyses_combined[skm]:.5f}, Score: {score_value:.5e}")
 
-            return scores[0], scores[1]
-
-        if verbose:
-            print(f"~🥇 Final Equal Scores (penalized): {w_0:.5e}, {w_1:.5e}")
-        return w_0, w_1
+        # Return scores after processing all scoring keys
+        return scores[0], scores[1]
 
 
     def __del__(self):
@@ -1131,19 +1219,47 @@ async def myMain(args):
 
     hof = tools.ParetoFront()
 
-    population, logbook = algorithms.eaMuPlusLambda(
+    # population = alternatives.cma(
+    #     population,
+    #     toolbox,
+    #     evaluator=evaluator,
+    #     ngen=max(1, int(config["optimize"]["iters"] / len(population))),
+    #     verbose=True,
+    #     parameter_bounds=param_bounds
+    # )
+    population = alternatives.pso(
         population,
         toolbox,
         evaluator=evaluator,
-        mu=config["optimize"]["population_size"],
-        lambda_=config["optimize"]["population_size"],
-        cxpb=config["optimize"]["crossover_probability"],
-        mutpb=config["optimize"]["mutation_probability"],
         ngen=max(1, int(config["optimize"]["iters"] / len(population))),
-        stats=stats,
-        halloffame=hof,
         verbose=True,
+        parameter_bounds=param_bounds
     )
+
+    # final_population, logbook = alternatives.nevergrad_opt(
+    #     population=population,
+    #     toolbox=toolbox, 
+    #     evaluator=evaluator,
+    #     ngen=max(1, int(config["optimize"]["iters"] / len(population))),
+    #     verbose=True,
+    #     parameter_bounds=param_bounds,
+    #     optimizer_name="NGOpt"  # Can be "DE", "PSO", "CMA", etc.
+    # )
+
+    # population, logbook = algorithms.eaMuPlusLambda(
+    #     population,
+    #     toolbox,
+    #     evaluator=evaluator,
+    #     mu=config["optimize"]["population_size"],
+    #     lambda_=config["optimize"]["population_size"],
+    #     cxpb=config["optimize"]["crossover_probability"],
+    #     mutpb=config["optimize"]["mutation_probability"],
+    #     ngen=max(1, int(config["optimize"]["iters"] / len(population))),
+    #     stats=stats,
+    #     halloffame=hof,
+    #     verbose=True,
+    #     # parameter_bounds=param_bounds
+    # )
 
 async def main():
     manage_rust_compilation()
@@ -1337,8 +1453,12 @@ async def main():
             return creator.Individual(
                 [getattr(toolbox, f"attr_{i}")() for i in range(len(param_bounds))]
             )
-
+        def create_individual_from_list(param_bounds_internal):
+            return creator.Individual(
+                [getattr(toolbox, f"attr_{i}")() for i in range(len(param_bounds_internal))]
+            )
         toolbox.register("individual", create_individual)
+        toolbox.register("individual_from_list", create_individual_from_list)
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
         # Register the evaluation function
@@ -1425,6 +1545,7 @@ async def main():
             stats=stats,
             halloffame=hof,
             verbose=True,
+            parameter_bounds=param_bounds
         )
 
         # Print statistics

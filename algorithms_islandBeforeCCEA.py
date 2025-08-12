@@ -248,7 +248,6 @@ import os
 import pickle
 import datetime
 import time
-import json
 import numpy as np
 from collections import deque
 from rich.console import Console
@@ -312,23 +311,29 @@ def evaluate_solution(args):
         # Return a tuple (as DEAP expects)
         return evaluator.evaluate(ind)
 
-def run_algo(evaluator, population, showMe=False):
+def run_algo(evaluator, population, showMe=False, islands=None, island_id=None):
     with open(WATCH_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
         # Return a tuple (as DEAP expects)
-        return run_algo_wrapped(evaluator, population, showMe=False)
+        return run_algo_wrapped(evaluator, population, showMe=False, islands=islands, island_id=island_id)
 
 def console_wrapper(msg):
     with open(WATCH_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
         console.print(msg)
 
-def run_algo_wrapped(evaluator, population, showMe=False):
+def run_algo_wrapped(evaluator, population, showMe=False, islands=None, island_id=None):
     fitnesses = []
     best_fitness_so_far = float("inf")
+
+    # Handle island-based evaluation with multiple progress bars
+    pool = Pool(processes=(cpu_count() - 1))
+    if islands is not None and island_id is not None:
+        return run_algo_islands(evaluator, islands, pool)
+    
     args = [(evaluator, ind, showMe) for ind in population]
-    pool = Pool(processes=(cpu_count() - 2))
     if showMe:
         return evaluate_solution(args[0])
-
+    
+    # Single population evaluation (original behavior)
     with Progress(
         SpinnerColumn(spinner_name="dots12"),
         TextColumn("🔍 [progress.description]{task.description}"),
@@ -357,9 +362,190 @@ def run_algo_wrapped(evaluator, population, showMe=False):
 
     return population, best_fitness_so_far
 
+def run_algo_islands(evaluator, islands, pool):
+    """Evaluate multiple islands with individual progress bars"""
+    all_args = []
+    island_ranges = []
+    start_idx = 0
+    
+    # Prepare arguments and track island ranges
+    for island_id, island in enumerate(islands):
+        island_args = [(evaluator, ind, False) for ind in island]
+        all_args.extend(island_args)
+        island_ranges.append((start_idx, start_idx + len(island_args)))
+        start_idx += len(island_args)
+    
+    # Initialize results tracking
+    all_fitnesses = [None] * len(all_args)
+    island_best_fitnesses = [float("inf")] * len(islands)
+    completed_counts = [0] * len(islands)
+    
+    with Progress(
+        SpinnerColumn(spinner_name="dots12"),
+        TextColumn("🏝️ [progress.description]{task.description}"),
+        BarColumn(bar_width=None),
+        "•",
+        TaskProgressColumn(text_format="[progress.percentage]{task.percentage:>5.1f}%", show_speed=True),
+        "•",
+        TimeElapsedColumn(),
+        "•",
+        TimeRemainingColumn(),
+        "•",
+        console=console,
+        transient=True
+    ) as progress:
+        
+        # Create progress tasks for each island
+        island_tasks = []
+        for island_id, island in enumerate(islands):
+            task = progress.add_task(
+                f"Island {island_id+1} | Best: {island_best_fitnesses[island_id]:.6e}", 
+                total=len(island)
+            )
+            island_tasks.append(task)
+        
+        # Process results as they complete
+        result_idx = 0
+        for fitness in pool.imap_unordered(evaluate_solution, all_args):
+            all_fitnesses[result_idx] = fitness
+            
+            # Find which island this result belongs to
+            for island_id, (start, end) in enumerate(island_ranges):
+                if start <= result_idx < end:
+                    completed_counts[island_id] += 1
+                    island_best_fitnesses[island_id] = min(island_best_fitnesses[island_id], fitness[0])
+                    
+                    # Update progress for this island
+                    progress.update(
+                        island_tasks[island_id], 
+                        advance=1,
+                        description=f"Island {island_id+1} | Best: {island_best_fitnesses[island_id]:.6e}"
+                    )
+                    break
+            
+            result_idx += 1
+    
+    # Assign fitnesses back to individuals
+    result_idx = 0
+    for island_id, island in enumerate(islands):
+        for ind in island:
+            ind.fitness.values = all_fitnesses[result_idx]
+            result_idx += 1
+    
+    # Return global best fitness
+    global_best = min(island_best_fitnesses)
+    return islands, global_best
+
+
+
+def calculate_island_diversity(island1, island2):
+    """Calculate diversity between two islands based on fitness distribution"""
+    if not island1 or not island2:
+        return 1.0
+    
+    fitness1 = [ind.fitness.values[0] for ind in island1]
+    fitness2 = [ind.fitness.values[0] for ind in island2]
+    
+    mean1, mean2 = np.mean(fitness1), np.mean(fitness2)
+    std1, std2 = np.std(fitness1), np.std(fitness2)
+    
+    # Normalized difference in means and standard deviations
+    mean_diff = abs(mean1 - mean2) / (abs(mean1) + abs(mean2) + 1e-10)
+    std_diff = abs(std1 - std2) / (std1 + std2 + 1e-10)
+    
+    return (mean_diff + std_diff) / 2
+
+def probabilistic_migration(migrant, target_island, acceptance_base=0.3, fitness_weight=0.7):
+    """Determine if a migrant should be accepted into target island"""
+    if not target_island:
+        return True
+    
+    target_fitnesses = [ind.fitness.values[0] for ind in target_island]
+    target_avg_fitness = np.mean(target_fitnesses)
+    target_best_fitness = min(target_fitnesses)
+    migrant_fitness = migrant.fitness.values[0]
+    
+    # Base acceptance probability for diversity
+    acceptance_prob = acceptance_base
+    
+    # Fitness-based adjustment
+    if migrant_fitness < target_avg_fitness:  # Better than average
+        fitness_bonus = min(0.6, (target_avg_fitness - migrant_fitness) / abs(target_avg_fitness + 1e-10))
+        acceptance_prob += fitness_weight * fitness_bonus
+    
+    # Always give some chance for diversity, even if fitness is worse
+    acceptance_prob = max(0.1, min(0.9, acceptance_prob))
+    
+    return random.random() < acceptance_prob
+
+def perform_migration(islands, island_stats, gen, toolbox, migration_size=2):
+    """Perform ring topology migration with probabilistic acceptance"""
+    num_islands = len(islands)
+    log_message(f"🌊 Starting migration at generation {gen}", emoji="🚢")
+    
+    migration_summary = []
+    
+    for i in range(num_islands):
+        source_island = islands[i]
+        target_island_id = (i + 1) % num_islands
+        target_island = islands[target_island_id]
+        
+        # Get best individuals from source island
+        source_best = sorted(source_island, key=lambda x: x.fitness.values[0])[:migration_size]
+        
+        migrations_sent = 0
+        migrations_accepted = 0
+        
+        for migrant in source_best:
+            island_stats[i]['migrations_sent'] += 1
+            island_stats[target_island_id]['migrations_received'] += 1
+            migrations_sent += 1
+            
+            if probabilistic_migration(migrant, target_island):
+                # Replace worst individual in target island
+                worst_idx = max(range(len(target_island)), 
+                              key=lambda idx: target_island[idx].fitness.values[0])
+                old_fitness = target_island[worst_idx].fitness.values[0]
+                target_island[worst_idx] = toolbox.clone(migrant)
+                
+                island_stats[target_island_id]['migrations_accepted'] += 1
+                migrations_accepted += 1
+                
+                log_message(f"  ✅ Island {i+1}→{target_island_id+1}: "
+                          f"Migrant {migrant.fitness.values[0]:.6e} replaced {old_fitness:.6e}", 
+                          emoji="🚀")
+            else:
+                log_message(f"  ❌ Island {i+1}→{target_island_id+1}: "
+                          f"Migrant {migrant.fitness.values[0]:.6e} rejected", 
+                          emoji="🚫")
+        
+        migration_summary.append({
+            'source': i + 1,
+            'target': target_island_id + 1,
+            'sent': migrations_sent,
+            'accepted': migrations_accepted
+        })
+    
+    # Log migration summary
+    for summary in migration_summary:
+        acceptance_rate = (summary['accepted'] / summary['sent']) * 100 if summary['sent'] > 0 else 0
+        log_message(f"  🏝️ Island {summary['source']} → Island {summary['target']}: "
+                  f"{summary['accepted']}/{summary['sent']} accepted ({acceptance_rate:.1f}%)", 
+                  emoji="📊")
+    
+    total_sent = sum(s['sent'] for s in migration_summary)
+    total_accepted = sum(s['accepted'] for s in migration_summary)
+    overall_rate = (total_accepted / total_sent) * 100 if total_sent > 0 else 0
+    
+    log_message(f"🏝️ Migration Summary: {total_accepted}/{total_sent} "
+              f"successful ({overall_rate:.1f}%)", emoji="📊", panel=True)
+
+
+
 def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluator,
                    stats=None, halloffame=None, verbose=__debug__,
-                   checkpoint_path="checkpoint.pkl", checkpoint_interval=1):
+                   checkpoint_path="checkpoint.pkl", checkpoint_interval=1,
+                   use_islands=True, num_islands=20, migration_interval=20, migration_size=2):
     
     start_time = time.time()
 
@@ -448,6 +634,28 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
         start_gen = 1
         best_fitness_so_far = float("inf")
 
+    # 🏝️ Initialize Islands if enabled (AFTER population is ready)
+    islands = []
+    island_stats = []
+    if use_islands:
+        island_size = mu // num_islands
+        log_message(f"🏝️ Initializing {num_islands} islands with {island_size} individuals each", emoji="🌊")
+        
+        for i in range(num_islands):
+            start_idx = i * island_size
+            end_idx = start_idx + island_size if i < num_islands - 1 else mu
+            island = population[start_idx:end_idx]
+            islands.append(island)
+            island_stats.append({
+                'best_fitness': float('inf'),
+                'migrations_sent': 0,
+                'migrations_received': 0,
+                'migrations_accepted': 0
+            })
+            log_message(f"  Island {i+1}: {len(island)} individuals, best fitness: {min(ind.fitness.values[0] for ind in island):.6e}", emoji="🏝️")
+        
+        log_message(f"🏝️ Island initialization complete - ready for evolution!", emoji="✅", panel=True)
+
     record = stats.compile(population) if stats is not None else {}
     total_time = 0
 
@@ -460,7 +668,10 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
     delta = 0.015  # base change per update
     fitnesses = []
     gen_runtimes = []
-    stagnition = 0
+    stagnation = 0
+    
+
+
 
 
     log_message(f"Starting Generational Loop", emoji="🧬")
@@ -483,19 +694,22 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
             threshold = current_div  # fallback for early generations
 
 
-        # Difference ratio to scale delta gradually
-        diff_ratio = abs(best_fitness_so_far / (mean_fitness - best_fitness_so_far))
-        scaled_delta = delta * (1 + min(diff_ratio, 5))  # limit runaway jumps
+        # Difference ratio to scale delta gradually (with division by zero protection)
+        # if abs(mean_fitness - best_fitness_so_far) > 1e-10:
+        #     diff_ratio = abs(best_fitness_so_far / (mean_fitness - best_fitness_so_far))
+        # else:
+        #     diff_ratio = 1.0  # fallback when fitnesses are very close
+        # scaled_delta = delta * (1 + min(diff_ratio, 5))  # limit runaway jumps
 
-        if abs(best_fitness_so_far / (mean_fitness - best_fitness_so_far)) < 0.1:
-            mutpb = min(MAX_MUTPB, mutpb + scaled_delta)
-            mut_status = f"{RED}⬆️ Increased by {scaled_delta:.4f}{RESET}"
-        elif gen - start_gen >= 5:
-            mutpb = MAX_MUTPB
-            mut_status = f"{RED}⬆️ Maxed out to {MAX_MUTPB:.4f}{RESET}"
-        else:
-            mutpb = max(MIN_MUTPB, mutpb - scaled_delta)
-            mut_status = f"{GREEN}⬇️ Decreased by {scaled_delta:.4f}{RESET}"
+        # if abs(mean_fitness - best_fitness_so_far) > 1e-10 and abs(best_fitness_so_far / (mean_fitness - best_fitness_so_far)) < 0.1:
+        #     mutpb = min(MAX_MUTPB, mutpb + scaled_delta)
+        #     mut_status = f"{RED}⬆️ Increased by {scaled_delta:.4f}{RESET}"
+        # elif gen - start_gen >= 5:
+        #     mutpb = MAX_MUTPB
+        #     mut_status = f"{RED}⬆️ Maxed out to {MAX_MUTPB:.4f}{RESET}"
+        # else:
+        #     mutpb = max(MIN_MUTPB, mutpb - scaled_delta)
+        #     mut_status = f"{GREEN}⬇️ Decreased by {scaled_delta:.4f}{RESET}"
 
         # if abs(current_div) < abs(threshold):
         #     mutpb = min(MAX_MUTPB, mutpb + scaled_delta)
@@ -507,15 +721,70 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
         #     mutpb = max(MIN_MUTPB, mutpb - scaled_delta)
         #     mut_status = f"{GREEN}⬇️ Decreased by {scaled_delta:.4f}{RESET}"
 
-        # mutpb = 0.2
+        mutpb = 0.2
+        mut_status = "Fixed at 0.2"
         cxpb = 1 - mutpb
 
 
         
-        offspring = varOr(population, toolbox, lambda_, cxpb, mutpb)
-
-        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        offspring, generational_best = run_algo(evaluator, invalid_ind)
+        # 🏝️ Island Evolution vs Single Population Evolution
+        if use_islands:
+            # Generate offspring for each island
+            all_offspring = []
+            island_offspring_lists = []
+            
+            for island_id, island in enumerate(islands):
+                island_lambda = lambda_ // num_islands
+                island_offspring = varOr(island, toolbox, island_lambda, cxpb, mutpb)
+                island_offspring_lists.append(island_offspring)
+                all_offspring.extend(island_offspring)
+            
+            # Evaluate all island offspring with individual progress bars
+            invalid_offspring_by_island = []
+            for island_offspring in island_offspring_lists:
+                invalid_ind = [ind for ind in island_offspring if not ind.fitness.valid]
+                invalid_offspring_by_island.append(invalid_ind)
+            
+            # Use the new island-aware evaluation
+            evaluated_islands, generational_best = run_algo(evaluator, None, islands=invalid_offspring_by_island, island_id=0)
+            
+            # Update island stats and apply selection
+            island_best_fitnesses = []
+            best_island_id = None
+            for island_id, (island, island_offspring) in enumerate(zip(islands, island_offspring_lists)):
+                # Get best fitness from this island's offspring
+                island_offspring_fitnesses = [ind.fitness.values[0] for ind in island_offspring if ind.fitness.valid]
+                if island_offspring_fitnesses:
+                    island_generational_best = min(island_offspring_fitnesses)
+                    
+                    # Update island stats
+                    if island_generational_best < island_stats[island_id]['best_fitness']:
+                        island_stats[island_id]['best_fitness'] = island_generational_best
+                        log_message(f"🏝️ Island {island_id+1} new best: {island_generational_best:.6e}", emoji="🌟")
+                    
+                    island_best_fitnesses.append(island_generational_best)
+                else:
+                    island_best_fitnesses.append(float('inf'))
+                
+                # Apply selection within island
+                combined = island + island_offspring
+                islands[island_id] = toolbox.select(combined, len(island))
+            
+            # Global best from all islands and track which island it came from
+            if island_best_fitnesses:
+                generational_best = min(island_best_fitnesses)
+                best_island_id = island_best_fitnesses.index(generational_best) + 1  # +1 for human-readable numbering
+            else:
+                generational_best = float('inf')
+                best_island_id = None
+            offspring = all_offspring  # For compatibility with existing stagnation logic
+            
+        else:
+            # Original single population evolution
+            offspring = varOr(population, toolbox, lambda_, cxpb, mutpb)
+            invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+            offspring, generational_best = run_algo(evaluator, invalid_ind)
+        
         if generational_best < best_fitness_so_far:
             log_message(f" New best fitness: {generational_best}", emoji="🌠")
             log_message(f" Fitness Diff: {generational_best - best_fitness_so_far:.4e}", emoji="🌙")
@@ -539,7 +808,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
         # 🎯 Stagnation-based random injection: add new individuals every 20 generations of stagnation
         if stagnation > 0 and stagnation % 10 == 0:
             num_to_inject = max(1, int(mu * 0.1))  # inject 10% new individuals
-            log_message(f"{RED}🚨 Fitness stagnation detected ({stagnation} gens)! Injecting {num_to_inject} random individuals{RESET}")
+            log_message(f"🚨 Fitness stagnation detected ({stagnation} gens)! Injecting {num_to_inject} random individuals")
             
             # Generate new random individuals and evaluate them
             new_individuals = []
@@ -553,36 +822,38 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
             offspring.extend(new_individuals)
             log_message(f"Added {num_to_inject} new individuals to offspring pool for selection", emoji="🔄")
 
-        # for ind, fit in zip(invalid_ind, fitnesses):
-        #     ind.fitness.values = fit
-
-        # Manually apply elitism without using tools.selBest
-        best_ind = min(population + offspring, key=lambda ind: ind.fitness.values[0])
-
+        # 🏝️ Migration Logic
+        if use_islands and gen % migration_interval == 0 and gen > 0:
+            perform_migration(islands, island_stats, gen, toolbox, migration_size)
         
-        # Select new population (mu - 1 individuals)
-        selected = toolbox.select(population + offspring, mu - 1)
-        
-        # Ensure the best individual survives to next generation
-        population[:] = selected + [best_ind]
-
+        # Population handling differs for islands vs single population
+        if use_islands:
+            # Combine all islands back into population for stats calculation
+            population = [ind for island in islands for ind in island]
+            best_ind = min(population, key=lambda ind: ind.fitness.values[0])
+        else:
+            # Original single population logic
+            best_ind = min(population + offspring, key=lambda ind: ind.fitness.values[0])
+            
+            # Select new population (mu - 1 individuals)
+            selected = toolbox.select(population + offspring, mu - 1)
+            
+            # Ensure the best individual survives to next generation
+            population[:] = selected + [best_ind]
 
         log_message(f"Elite preserved with fitness: {best_ind.fitness.values[0]}", emoji="🏅")
-        # evaluate_solution((evaluator, best_ind, True))
 
         old_best = record["min"][0]
-
-
         record = stats.compile(population) if stats is not None else {}
 
         if record["min"][0] < old_best:
-            stagnition = 0
+            stagnation = 0
         else:
-            stagnition += 1
+            stagnation += 1
 
-        # logbook.record(gen=gen, nevals=len(invalid_ind), **record)
+        # Verbose logging with island statistics
         if verbose:
-                    # Extract statistics
+            # Extract statistics
             best_fitness_so_far = record["min"][0]
             mean_fitness = record["avg"][0]
             std_fitness = record["std"][0]
@@ -592,25 +863,38 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
             gen_runtimes.append(gen_time)
             avg_gen_time = sum(gen_runtimes) / len(gen_runtimes)
 
+            # Build island-specific stats if using islands
+            island_info = ""
+            if use_islands:
+                island_info = f"\n                🏝️ Islands: {num_islands} | Migration every {migration_interval} gens"
+                for i, island_stat in enumerate(island_stats):
+                    island_best = min(ind.fitness.values[0] for ind in islands[i])
+                    island_info += f"\n                  🏝️ Island {i+1}: Best {island_best:.6e} | Sent: {island_stat['migrations_sent']} | Received: {island_stat['migrations_received']} | Accepted: {island_stat['migrations_accepted']}"
+
+            # Format generational best fitness line with island info if using islands
+            if use_islands and best_island_id is not None:
+                gen_best_line = f"🎖️ Generational Best fitness: {generational_best:.6e} (Island {best_island_id})"
+            else:
+                gen_best_line = f"🎖️ Generational Best fitness: {generational_best:.6e}"
+
             log_message(
                 f"""{CYAN}🌟 Gen {gen}{RESET}
                 🧜‍♂️ Diversity: {current_div:.4e}
                 🧮 Threshold: {threshold:.4e}
                 🧬 Mutation: {mutpb:.2f} ({mut_status})
-                ⏱️ Stagnition: {stagnition}
+                ⏱️ Stagnation: {stagnation}
                 🌍 Global Best fitness: {best_fitness_so_far:.6e}
-                🎖️ Generational Best fitness: {generational_best:.6e}
+                {gen_best_line}
                 📊 Mean fitness: {mean_fitness:.6e}
                 👎 Worst fitness: {worst_fitness:.6e}
                 📉 Fitness std dev: {std_fitness:.6e}
                 ⏱️ Generation time: {gen_time:.2f} sec / {(gen_time/60):.2f} min
-                📆 Avg gen time: {avg_gen_time:.2f} sec / {(avg_gen_time/60):.2f} min""",
+                📆 Avg gen time: {avg_gen_time:.2f} sec / {(avg_gen_time/60):.2f} min{island_info}""",
                     panel=True,timestamp=False
             )
-            # print(logbook.stream)
 
         if gen % checkpoint_interval == 0:
-            # Save checkpoint with Rule to indicate that we saved
+            # Save checkpoint
             with open(checkpoint_path, "wb") as f:
                 pickle.dump({
                     "population": population,
@@ -618,15 +902,6 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, evaluato
                     "generation": gen
                 }, f)
             log_message(f"Saved checkpoint at generation {gen}", emoji="💾")
-
-        # gen_time = time.time() - gen_start_time
-        # total_time += gen_time
-        # avg_time = total_time / (gen - start_gen + 1)
-
-        # log_message(
-        #     f"Average time per iteration: {avg_time:.2f} seconds ({avg_time/60:.2f} minutes, {avg_time/3600:.2f} hours)",
-        #     emoji="⏳"
-        # )
 
     total_time = time.time() - start_time
     log_message(

@@ -16,9 +16,9 @@ def load_pickle_file(file_path):
 # Example usage
 import os
 
-file_path = 'checkpoint.pkl'  # Replace with your actual file path
+file_path = 'pso_history_data.pkl'  # Replace with your actual file path
 data = load_pickle_file(file_path)
-DESIRED_POP_SIZE = 1000
+DESIRED_POP_SIZE = 3000
 
 if data:
     print("📦 Starting pickle sizer...")
