@@ -75,14 +75,14 @@ for index in "${!analysis_files[@]}"; do
   analysis_json="${analysis_files[$index]}"
   echo -e "${YELLOW}⭐ Processing rank $((index + 1)) / ${#analysis_files[@]}: ${CYAN}$analysis_json${NC}"
 
-  # 🛠️ Update start_date
-  tmp_json="${analysis_json}.tmp"
-  jq --arg date "$START_DATE" '.backtest.start_date = $date' "$analysis_json" > "$tmp_json" && mv "$tmp_json" "$analysis_json"
-  echo -e "${CYAN}✅ backtest start_date updated ✅${NC}"
+  # # 🛠️ Update start_date
+  # tmp_json="${analysis_json}.tmp"
+  # jq --arg date "$START_DATE" '.backtest.start_date = $date' "$analysis_json" > "$tmp_json" && mv "$tmp_json" "$analysis_json"
+  # echo -e "${CYAN}✅ backtest start_date updated ✅${NC}"
 
-  # 🛠️ Update end_date
-  jq --arg date "$END_DATE" '.backtest.end_date = $date' "$analysis_json" > "$tmp_json" && mv "$tmp_json" "$analysis_json"
-  echo -e "${CYAN}✅ backtest end_date updated ✅${NC}"
+  # # 🛠️ Update end_date
+  # jq --arg date "$END_DATE" '.backtest.end_date = $date' "$analysis_json" > "$tmp_json" && mv "$tmp_json" "$analysis_json"
+  # echo -e "${CYAN}✅ backtest end_date updated ✅${NC}"
 
   latest_values=$(jq -r '.analyses.combined | .adg, .adg_w, .mdg, .mdg_w, .gain, .loss_profit_ratio, .loss_profit_ratio_w, .position_held_hours_mean, .positions_held_per_day, .sharpe_ratio, .sharpe_ratio_w' "$analysis_json")
 

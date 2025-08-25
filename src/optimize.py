@@ -336,6 +336,8 @@ class Evaluator:
         self.config = config
         logging.info("Evaluator initialization complete.")
         self.results_queue = results_queue
+        
+
 
     def evaluate(self, individual, overrides_list=[]):
         config = individual_to_config(
@@ -365,18 +367,19 @@ class Evaluator:
             analyses[exchange]['equity_length'] = len(equities_usd)
 
         analyses_combined = self.combine_analyses(analyses)
-        w_0, w_1 = self.calc_fitness(analyses_combined, analyses, individual)
+        w_0, w_1, write_to_file = self.calc_fitness(analyses_combined, analyses, individual)
         analyses_combined.update({"w_0": w_0, "w_1": w_1})
 
-        data = {
-            **config,
-            **{
-                "analyses_combined": analyses_combined,
-                "analyses": analyses,
-            },
-        }
-        self.results_queue.put(data)
-        return w_0, w_1
+        if write_to_file:
+            data = {
+                **config,
+                **{
+                    "analyses_combined": analyses_combined,
+                    "analyses": analyses,
+                },
+            }
+            self.results_queue.put(data)
+        return w_0, w_1, not write_to_file
     
     def combine_analyses(self, analyses):
         analyses_combined = {}
@@ -464,16 +467,16 @@ class Evaluator:
             
             # Base penalty that scales exponentially with how early the bankruptcy occurred
             # Early bankruptcies (low progress_ratio) get much higher penalties
-            base_penalty = 10 ** (len(keys) + 5)  # Large base penalty
+            base_penalty = 10 ** (len(keys) + 2)  # Large base penalty
             
             # Exponential scaling: earlier bankruptcies get exponentially higher penalties
             # progress_ratio of 0.1 (10% through) gets ~10x higher penalty than 0.9 (90% through)
-            early_bankruptcy_multiplier = (1.0 - progress_ratio) ** 2 + 0.1  # Ensures minimum multiplier of 0.1
+            early_bankruptcy_multiplier = (1.0 - progress_ratio) + 0.1  # Ensures minimum multiplier of 0.1
             
             penalty = base_penalty * early_bankruptcy_multiplier
             
             # Skip logs and table for bankrupt strategies
-            return penalty, penalty
+            return penalty, penalty, False
         
         # Check for high drawdown early to skip table generation
         prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
@@ -482,8 +485,8 @@ class Evaluator:
         
         # Skip table and logs for high drawdown strategies (including no-trade strategies)
         if drawdown >= 1.0 or equity_diff >= 1.0:
-            penalty = 10**(len(keys) + 5)  # Large penalty for high drawdown
-            return penalty, penalty
+            penalty = 10**(len(keys) + 99)  # Large penalty for high drawdown
+            return penalty, penalty, False
         
         # Debug: Log when we have a normal strategy that should show a table
         if verbose:
@@ -553,7 +556,10 @@ class Evaluator:
             "equity_balance_diff_neg_mean": "E/B Diff - mean",
             "equity_balance_diff_pos_max": "E/B Diff + max",
             "equity_balance_diff_pos_mean": "E/B Diff + mean",
-            "time_in_market_percent": "TiM %"
+            "time_in_market_percent": "TiM %",
+            "days_without_position": "Days w/o Pos",
+            "days_with_stale_position": "Days Stale",
+            "expected_shortfall_1pct": "Expected Fall 1%"
         }
         i = len(keys) + 1
         
@@ -625,11 +631,14 @@ class Evaluator:
             # modifier += contribution
             # i-=1
 
+            # contribution = (10 ** 1) * normalize_delta(delta,current,target,expect_higher)
+            # if modifier == 0:
+            #     modifier = contribution
+            # elif contribution != 0:
+            #     modifier = modifier * contribution
+
             contribution = (10 ** 1) * normalize_delta(delta,current,target,expect_higher)
-            if modifier == 0:
-                modifier = contribution
-            elif contribution != 0:
-                modifier = modifier * contribution
+            modifier = modifier + contribution
 
             # Update min/max for contribution and modifier
             min_contribution = min(min_contribution, contribution)
@@ -691,72 +700,37 @@ class Evaluator:
         table.add_column("NPos", justify="right")
         table.add_column("%", justify="right")
 
-        # ideal_targets = {
-        #     "Gain": 10000,
-        #     "DD Worst": 0.0001,
-        #     "DD 1%": 0.0001,
-        #     "E/B Diff - max": 0.0001,
-        #     "E/B Diff - mean": 0.0001,
-        #     "E/B Diff + max": 0.0001,
-        #     "E/B Diff + mean": 0.0001,
-        #     "R²": 1,
-        #     "Sharpe": 1,
-        #     "LPR": 0.0001,
-        #     "Hrs/Pos": 0.0001,
-        #     "Pos/Day": 100,
-        #     "Unchg Max": 1,
-        #     "ADG": 1,
-        #     "Calmar": 1,
-        #     "MDG": 1,
-        #     "Omega": 1,
-        #     "Sortino": 1,
-        #     "Sterling": 1,
-        # }
         # scaling_values = {
-        #     "Gain": 1,
-        #     "DD Worst": 2,
-        #     "DD 1%": 3,
-        #     "E/B Diff - max": 1,
-        #     "E/B Diff - mean": 1,
-        #     "E/B Diff + max": 1,
-        #     "E/B Diff + mean": 1,
-        #     "R²": 5,
-        #     "Sharpe": 2,
-        #     "LPR": 1,
-        #     "Hrs/Pos": 1,
-        #     "Pos/Day": 2,
-        #     "Unchg Max": 2,
-        #     "ADG": 1,
-        #     "Calmar": 1,
-        #     "MDG": 2,
-        #     "Omega": 2,
-        #     "Sortino": 2,
-        #     "Sterling": 2,
+        #     "ADG":              10,
+        #     "Calmar":           4,
+        #     "Days Stale":       4,
+        #     "Days w/o Pos":     4,
+        #     "DD Worst":         5,
+        #     "DD 1%":            5,
+        #     "E/B Diff - max":   1,
+        #     "E/B Diff - mean":  1,
+        #     "E/B Diff + max":   -1,
+        #     "E/B Diff + mean":  -1,
+        #     "GADG":              5,
+        #     "Gain":             10,
+        #     "LPR":              2,
+        #     "MDG":              5,
+        #     "Omega":            4,
+        #     "R²":               20,
+        #     "Sharpe":           4,
+        #     "Sortino":          4,
+        #     "Sterling":         4,
+        #     "TiM %":            2, 
+        #     # "Hrs/Pos":          1,
+        #     # "Pos/Day":          3,
+        #     # "Unchg Max":        3,
         # }
         scaling_values = {
-            "Gain":             2,
-            # "DD Worst":         2,
-            # "DD 1%":            2,
             "DD Worst":         -99,
             "DD 1%":            -99,
-            # "E/B Diff - max":   2,
-            # "E/B Diff - mean":  2,
-            # "E/B Diff + max":   1,
-            # "E/B Diff + mean":  1,
-            "R²":               4,
-            # "TiM %":            2, 
-            # "Sharpe":           4,
-            # "LPR":              2,
-            # "Hrs/Pos":          1,
-            # "Pos/Day":          3,
-            # "Unchg Max":        3,
-            # "ADG":              5,
-            # "GADG":              5,
-            # "Calmar":           2,
-            # "MDG":              4,
-            # "Omega":            3,
-            # "Sortino":          3,
-            # "Sterling":         3,
+            "Gain":             0,
+            "R²":               -99,
+            "Sharpe":           -99,
         }
         for result in results:
             key = result['key']
@@ -823,6 +797,8 @@ class Evaluator:
         # Display the table
         console.print(table)
         # console.print(f"Final Score: {(modifier) ** (1/(len(results)))}")
+        
+
 
 
         npos = individual[19]
@@ -846,7 +822,9 @@ class Evaluator:
                 # print(f"~🎯 [{skm}] Modifier: {modifier:.5e}, Value: {analyses_combined[skm]:.5f}, Score: {score_value:.5e}")
 
         # Return scores after processing all scoring keys
-        return scores[0], scores[1]
+        return scores[0], scores[1], True
+
+
 
 
     def __del__(self):
@@ -1121,6 +1099,10 @@ async def initEvaluator(config_path: str = None, **kwargs):
     )
 
     logging.info(f"Finished initializing evaluator...")
+    
+    # Ensure logs directory exists for best optimization status logging
+    os.makedirs("logs", exist_ok=True)
+    
     return evaluator, config
 
 

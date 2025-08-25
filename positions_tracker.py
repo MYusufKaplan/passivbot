@@ -32,7 +32,7 @@ gate = ccxt.gateio({
     'options': {'defaultType': 'swap'}
 })
 
-console = Console(force_terminal=True, no_color=False, color_system="truecolor", log_path=False, width=159)
+console = Console(force_terminal=True, no_color=False, color_system="truecolor", log_path=False, width=191)
 
 def hide_cursor():
     sys.stdout.write("\033[?25l")
@@ -231,7 +231,7 @@ def get_price_changes(symbol):
     return changes
 
 
-def build_dashboard(visual_symbol, symbol, position, current_price, orders, balance, price_changes):
+def build_position_panel(visual_symbol, symbol, position, current_price, orders, balance, all_positions=None):
     try_price = fetch_usdt_try_price()
     sell_orders = [o for o in orders if o['side'].lower() == 'sell']
     buy_orders = [o for o in orders if o['side'].lower() == 'buy']
@@ -245,13 +245,7 @@ def build_dashboard(visual_symbol, symbol, position, current_price, orders, bala
     buys = 0
     sells = len(sell_orders) + 1
 
-    # Fetch order book for volume calculations (not changed)
-    order_book = gate.fetch_order_book(symbol, limit=100, params={"interval": "0.0001"})
-    volume_sell_range = calculate_order_volume_sum(order_book, current_price, current_sell_price, 'sell')
-    volume_buy_range = calculate_order_volume_sum(order_book, highest_buy, current_price, 'buy')
-
     price_str = f"{current_price:.5f}"
-    changes_str = " • ".join([f"{k}: {v}" for k, v in price_changes.items()])
     unrealized_pnl = float(position['unrealizedPnl'])
     pnl_color = "green" if unrealized_pnl >= 0 else "red"
     entry_price = float(position.get('entryPrice', 0))
@@ -326,13 +320,11 @@ def build_dashboard(visual_symbol, symbol, position, current_price, orders, bala
                 avg_price_str = f" (Avg: {avg_price:.5f})"
 
         progress = Progress(
-
             TextColumn(
                 f"[bold]{f'{side}{sells}' if side == 'Sell' else f'{side}{buys} '}[/] "
                 f"{qty:.2f} @ {price:.5f}"
                 f"{' ' + pnl_str if side == 'Sell' else avg_price_str}"
             ),
-
             ColoredBarColumn(bar_color=color),
             TextColumn(f"{percent:>5.2f}%"),
             expand=True
@@ -345,71 +337,99 @@ def build_dashboard(visual_symbol, symbol, position, current_price, orders, bala
         )
         progress_renderables.append(progress.get_renderable())
 
-    # Info panel (unchanged)
+    # Info panel
     info = Table.grid(padding=0)
     info.add_row(f"[bold]📈 Symbol:[/] {visual_symbol}")
     info.add_row(f"[bold]🎯 Position:[/] {position['contracts']} contracts")
     info.add_row(f"[bold]💰 Current Price:[/] {price_str}")
-    # info.add_row(f"[bold]💰 Current Price:[/] {price_str} • {changes_str}")
     info.add_row(f"[bold]🧮 Unrealized PnL:[/] [{pnl_color}]{unrealized_pnl:.5f} ({(unrealized_pnl * try_price):.5f}₺)[/{pnl_color}]")
     info.add_row(f"[bold]✅ Realized PnL:[/] {realized_pnl:.5f} ({(realized_pnl * try_price):.5f}₺)")
     info.add_row(f"[bold]⚖️ Break-Even Price:[/] {break_even_price:.5f}" if break_even_price else "[bold]⚖️ Break-Even Price:[/] —")
 
     info_panel = Panel(info, title="📋 Position Info", expand=False)
 
-    # Balance panel (unchanged)
-    balance_table = Table.grid(padding=0)
-    balance_usdt = balance['total']['USDT']
-    equity_usdt = (balance_usdt + unrealized_pnl) 
-    equity_try = equity_usdt * try_price
-    balance_table.add_row(f"[bold]💰 Total Equity:[/] {equity_usdt:.2f} USDT")
-    # Calculate and display TRY balance and profit
-    profit_try = equity_try - 209000
-    balance_table.add_row(f"[bold]💰 Equity TRY:[/] {equity_try:.2f}₺ (Profit: {profit_try:+.2f}₺)")
-
-    balance_table.add_row(f"[bold]🔓 Free Balance:[/] {balance['free']['USDT']:.2f} USDT")
-    balance_table.add_row(f"[bold]📉 Used Margin:[/] {balance['used']['USDT']:.2f} USDT")
-
-    liq_price = position.get('liquidationPrice')
-    leverage = position.get('leverage')
-    margin_ratio = position.get('marginRatio')
-
-    if liq_price:
-        balance_table.add_row(f"[bold]🧯 Liq. Price:[/] {liq_price:.5f}")
-    if leverage:
-        balance_table.add_row(f"[bold]🧾 Leverage:[/] {leverage}")
-    if margin_ratio:
-        balance_table.add_row(f"[bold]📊 Margin Ratio:[/] {float(margin_ratio):.2%}")
-
-    balance_panel = Panel(balance_table, title="💼 Account Metrics", expand=False)
-
-    # Trade Duration Panel (unchanged)
+    # Trade Duration Panel
     timer_table = Table.grid(padding=0)
     timer_table.add_row(f"[bold]⏱️ Time in Trade:[/] {duration_str}")
     timer_panel = Panel(timer_table, title="⏱️ Trade Duration", expand=False)
 
-    # Volume panel (unchanged)
-    volume_table = Table.grid(padding=0)
-    volume_table.add_row(f"[bold]💹 Volume to Sell:[/] {volume_sell_range:.2e} USDT")
-    volume_table.add_row(f"[bold]💹 Volume to Buy:[/] {volume_buy_range:.2e} USDT")
-    volume_panel = Panel(volume_table, title="📚 Order Book Volume", expand=False)
+    # Combine info and timer panels side by side
+    info_timer_columns = Columns([info_panel, timer_panel], equal=True, expand=True)
 
-    # Header with timestamp (unchanged)
-    header = Table.grid(expand=True)
-    header.add_column(justify="left")
-    header.add_column(justify="right")
-    header.add_row("📊 Order Monitor", f"[dim]{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/]")
+    # Create position group with progress bars and info
+    position_content = Group(
+        *progress_renderables,
+        info_timer_columns
+    )
 
-    return volume_panel, info_panel, balance_panel, timer_panel, header, progress_renderables
+    # Wrap in panel with symbol title
+    position_panel = Panel(position_content, title=f"📍 {visual_symbol}", border_style="cyan", expand=True)
+
+    return position_panel
+
+def build_account_metrics_panel(balance, all_positions):
+    try_price = fetch_usdt_try_price()
+    balance_usdt = balance['total']['USDT']
+    
+    # Calculate total unrealized PnL from all active positions
+    total_unrealized_pnl = 0.0
+    if all_positions:
+        for pos in all_positions:
+            total_unrealized_pnl += float(pos['unrealizedPnl'])
+    
+    equity_usdt = (balance_usdt + total_unrealized_pnl) 
+    equity_try = equity_usdt * try_price
+    profit_try = equity_try - 209000
+
+    # Create a wider grid layout for better spread
+    balance_table = Table.grid(padding=(0, 2))
+    balance_table.add_column(justify="left")
+    balance_table.add_column(justify="left")
+    balance_table.add_column(justify="left")
+    
+    balance_table.add_row(
+        f"[bold]💰 Total Equity:[/] {equity_usdt:.2f} USDT",
+        f"[bold]🔓 Free Balance:[/] {balance['free']['USDT']:.2f} USDT",
+        f"[bold]📉 Used Margin:[/] {balance['used']['USDT']:.2f} USDT",
+        f"[bold]💰 Equity TRY:[/] {equity_try:.2f}₺ (Profit: {profit_try:+.2f}₺)"
+    )
+    
+    # balance_table.add_row(
+    #     f"[bold]💰 Equity TRY:[/] {equity_try:.2f}₺ (Profit: {profit_try:+.2f}₺)",
+    #     "",  # Empty middle column for this row
+    #     ""   # Empty right column for this row
+    # )
+
+    # Add liquidation info if available from any position
+    if all_positions:
+        liq_info = []
+        for pos in all_positions:
+            liq_price = pos.get('liquidationPrice')
+            leverage = pos.get('leverage')
+            margin_ratio = pos.get('marginRatio')
+            
+            if liq_price:
+                liq_info.append(f"🧯 {pos['symbol'].split(':')[0]} Liq: {liq_price:.5f}")
+            if leverage:
+                liq_info.append(f"🧾 {pos['symbol'].split(':')[0]} Lev: {leverage}")
+            if margin_ratio:
+                liq_info.append(f"📊 {pos['symbol'].split(':')[0]} Margin: {float(margin_ratio):.2%}")
+        
+        # Add liquidation info in chunks of 3
+        for i in range(0, len(liq_info), 3):
+            chunk = liq_info[i:i+3]
+            while len(chunk) < 3:
+                chunk.append("")  # Fill empty columns
+            balance_table.add_row(*chunk)
+
+    return Panel(balance_table, title="💼 Account Metrics", expand=True)
 
 def main():
     idle_time = 0
     first_run = True
     previous_positions = {}
     previous_orders = {}
-    current_position_index = 0
-    last_position_switch = time.time()
-    position_display_duration = 5  # seconds
+
 
     with Live(console=console, refresh_per_second=1, screen=False) as live:
         while True:
@@ -427,22 +447,7 @@ def main():
 
                 idle_time = 0
                 
-                # Handle position switching for slideshow
-                current_time = time.time()
-                if len(positions) > 1 and (current_time - last_position_switch) >= position_display_duration:
-                    current_position_index = (current_position_index + 1) % len(positions)
-                    last_position_switch = current_time
-                
-                # Ensure index is within bounds
-                if current_position_index >= len(positions):
-                    current_position_index = 0
-
-                # Get current position to display
-                position = positions[current_position_index]
-                symbol = position['symbol']
-                visual_symbol = position['symbol'].split(":")[0]
-                
-                # Process all positions for sound detection but only display current one
+                # Process all positions for sound detection
                 for pos in positions:
                     pos_symbol = pos['symbol']
                     pos_orders = fetch_orders(pos_symbol)
@@ -476,34 +481,51 @@ def main():
                     previous_positions[pos_symbol] = pos
                     previous_orders[pos_symbol] = pos_orders
 
-                # Display current position
-                current_price = float(gate.fetch_ticker(symbol)['last'])
-                orders = fetch_orders(symbol)
+                # Build position panels
+                position_panels = []
                 balance = gate.fetch_balance()
-                price_changes = get_price_changes(symbol)
-
-                volume_panel, info_panel, balance_panel, timer_panel, header, progress_renderables = build_dashboard(
-                    visual_symbol, symbol, position, current_price, orders, balance, price_changes
-                )
-
-                # Add position counter if multiple positions
-                position_counter = ""
-                if len(positions) > 1:
-                    remaining_time = position_display_duration - (current_time - last_position_switch)
-                    position_counter = f" [{current_position_index + 1}/{len(positions)}] • Next in {remaining_time:.0f}s"
-
-                layout = Group(
-                    header,
-                    *progress_renderables,
-                    info_panel,
-                    balance_panel,
-                    volume_panel,
-                    timer_panel
-                )
                 
-                panel_title = f"📍 {visual_symbol}{position_counter}"
-                dashboard_panel = Panel(layout, title=panel_title, border_style="cyan", expand=True)
-                live.update(dashboard_panel)
+                for position in positions:
+                    symbol = position['symbol']
+                    visual_symbol = position['symbol'].split(":")[0]
+                    current_price = float(gate.fetch_ticker(symbol)['last'])
+                    orders = fetch_orders(symbol)
+                    
+                    position_panel = build_position_panel(
+                        visual_symbol, symbol, position, current_price, orders, balance, positions
+                    )
+                    position_panels.append(position_panel)
+
+                # Build account metrics panel
+                account_panel = build_account_metrics_panel(balance, positions)
+
+                # Create header with timestamp
+                header = Table.grid(expand=True)
+                header.add_column(justify="center")
+                header.add_row(f"[dim]{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/]")
+
+                # Layout based on number of positions
+                if len(position_panels) == 1:
+                    # Single position - full width
+                    layout = Group(
+                        header,
+                        position_panels[0],
+                        account_panel
+                    )
+                else:
+                    # Multiple positions - side by side using table
+                    positions_table = Table.grid(padding=1, expand=True)
+                    for _ in range(len(position_panels)):
+                        positions_table.add_column(ratio=1)
+                    positions_table.add_row(*position_panels)
+                    
+                    layout = Group(
+                        header,
+                        positions_table,
+                        account_panel
+                    )
+
+                live.update(layout)
                 
                 first_run = False
                 time.sleep(1)  # Update every second

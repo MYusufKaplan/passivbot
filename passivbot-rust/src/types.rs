@@ -30,6 +30,7 @@ pub struct BacktestParams {
     pub coins: Vec<String>,
     pub max_days_without_position: usize,
     pub max_days_with_stale_position: usize,
+    pub enable_inactivity_bankruptcy: bool,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -279,6 +280,8 @@ pub struct Analysis {
     pub rsquared: f64,
     pub time_in_market_percent: f64,
     pub bankruptcy_timestamp: Option<usize>,
+    pub days_without_position: f64,
+    pub days_with_stale_position: f64,
 }
 
 impl Default for Analysis {
@@ -319,6 +322,8 @@ impl Default for Analysis {
             rsquared: 0.0,
             time_in_market_percent: 0.0,
             bankruptcy_timestamp: None,
+            days_without_position: 0.0,
+            days_with_stale_position: 0.0,
         }
     }
 }

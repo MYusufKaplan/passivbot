@@ -118,7 +118,7 @@ pub fn run_backtest(
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
         let (analysis_usd, analysis_btc) =
-            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral, backtest.bankruptcy_timestamp);
+            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral, backtest.bankruptcy_timestamp, backtest.max_days_without_position, backtest.max_days_with_stale_position);
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
@@ -178,6 +178,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         coins: extract_value(dict, "coins").unwrap_or_default(),
         max_days_without_position: extract_value(dict, "max_days_without_position").unwrap_or(1),
         max_days_with_stale_position: extract_value(dict, "max_days_with_stale_position").unwrap_or(7),
+        enable_inactivity_bankruptcy: extract_value(dict, "enable_inactivity_bankruptcy").unwrap_or(true),
     })
 }
 

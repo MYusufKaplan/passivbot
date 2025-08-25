@@ -296,6 +296,8 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "maker_fee": mss[coins[0]]["maker"],
             "coins": coins,
             "use_btc_collateral": config["backtest"].get("use_btc_collateral", False),
+            "max_days_without_position": config["backtest"].get("max_days_without_position", 365),
+            "max_days_with_stale_position": config["backtest"].get("max_days_with_stale_position", 365),
         }
     return bot_params, exchange_params, backtest_params
 

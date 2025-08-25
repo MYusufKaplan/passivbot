@@ -1,3 +1,7 @@
+// Fast allocator for better performance
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod backtest;
 mod closes;
 mod constants;

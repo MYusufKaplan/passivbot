@@ -1072,6 +1072,7 @@
 		"iters": 999999999999999,
 		"limits": {
 			"lower_bound_drawdown_worst": 0.333,
+      "drawdown_worst-2": 0.40,
 			"lower_bound_drawdown_worst_mean_1pct": 0.2,
 			"lower_bound_equity_balance_diff_neg_max": 0.4,
 			"lower_bound_equity_balance_diff_neg_mean": 0.01,
@@ -1087,7 +1088,7 @@
 		},
 		"mutation_probability": 0.25,
 		"n_cpus": 1,
-		"population_size": 2,
+		"population_size": 240,
 		"scoring": [
 			"gain",
 			"gain"

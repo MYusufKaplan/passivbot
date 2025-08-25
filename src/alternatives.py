@@ -51,7 +51,7 @@ console = console = Console(
             force_terminal=True, 
             no_color=False, 
             log_path=False, 
-            width=159,
+            width=191,
             color_system="truecolor",  # Force truecolor support
             legacy_windows=False
         )
@@ -99,10 +99,10 @@ def evaluate_solution(args):
         if showMe:
             with open(BEST_LOG_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
                 fitness = evaluator.evaluate(ind)
-                return fitness, idx
+                return fitness[0], idx, fitness[2]
         with open(LOG_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
             fitness = evaluator.evaluate(ind)
-            return fitness[0], idx
+            return fitness[0], idx, fitness[2]
     else:
         # Original case (CMA-ES, PSO)
         evaluator, ind, showMe = args
@@ -576,7 +576,7 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
         dimensions=num_parameters,
         options=options,
         bounds=bounds,
-        # init_pos=np.tile(initial_vector, (n_particles, 1))  # Initialize around config values
+        init_pos=np.array(initial_vector)  # Single particle position from config values
     )
     
     # Configure checkpoint and logging
@@ -587,9 +587,14 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
     )
     
     optimizer.set_initialization_strategy('lhs')
-    optimizer.set_velocity_boost_config(interval=10, fraction=0.20, enable=True)
+    optimizer.set_velocity_boost_config(interval=10, fraction=0.50, enable=True, optimize_limits_len=5)
     # optimizer.set_scout_config(scout_percentage=0.2, lifecycle=50, performance_threshold=3.0, enable=True)
-
+    optimizer.set_pca_visualization(
+        enable=True,
+        width=181,
+        height=31,
+        graphs_path="logs/graphs.log"
+    )
     # Add small random perturbations to initial positions
     perturbation_scale = 0.1
     for i in range(n_particles):
@@ -655,8 +660,10 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
                 # Get current global best fitness for progress tracking
                 global_best = getattr(optimizer.swarm, 'best_cost', float('inf')) if hasattr(optimizer, 'swarm') else float('inf')
                 
-                # Initialize generational best tracking
+                # Initialize generational best tracking and bankruptcy counters
                 generational_best = float('inf')
+                bankrupt_count = 0
+                non_bankrupt_count = 0
                 
                 task = progress.add_task(f"🐝 PSO Evaluating particles | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}", total=len(swarm_positions))
                 
@@ -664,19 +671,28 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
                 fitness_results = [None] * len(swarm_positions)  # Pre-allocate array
                 
                 for result in pool.imap_unordered(evaluate_solution, all_args):
-                    fitness_val, position_idx = result[0], result[1]
+                    fitness_val, position_idx, bankrupt = result[0], result[1], result[2]
                     fitness_results[position_idx] = fitness_val  # Place fitness at correct index
+                    
+                    # Track bankruptcy counts
+                    if bankrupt:
+                        bankrupt_count += 1
+                    else:
+                        non_bankrupt_count += 1
                     
                     # Track best in current generation (batch)
                     if fitness_val < generational_best:
                         generational_best = fitness_val
 
-                    # Update progress with generational best and global best
+                    # Simple count display
+                    push_bar = f"✅{non_bankrupt_count} 💀{bankrupt_count}"
+
+                    # Update progress with counts and fitness info
                     emoji = "🐝" if generational_best >= global_best else "🔥"
                     progress.update(
                         task, 
                         advance=1,
-                        description=f"{emoji} PSO Evaluating particles | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}"
+                        description=f"{emoji} {push_bar} | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}"
                     )
                 
                 # Convert to list for return (fitness_results is now in correct order)

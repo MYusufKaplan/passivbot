@@ -150,6 +150,9 @@ pub struct Backtest<'a> {
     position_timestamps: HashMap<usize, Option<usize>>, // coin_idx -> Option<timestamp>
     insufficient_positions_since: Option<usize>, // timestamp when we first dropped below n_positions
     inactivity_check_count: usize,
+    // New tracking fields for metrics instead of bankruptcy
+    pub max_days_without_position: f64,
+    pub max_days_with_stale_position: f64,
 }
 
 impl<'a> Backtest<'a> {
@@ -252,6 +255,9 @@ impl<'a> Backtest<'a> {
             position_timestamps: (0..n_coins).map(|i| (i, None)).collect(),
             insufficient_positions_since: None,
             inactivity_check_count: 0,
+            // Initialize tracking metrics
+            max_days_without_position: 0.0,
+            max_days_with_stale_position: 0.0,
         }
     }
 
@@ -347,31 +353,38 @@ impl<'a> Backtest<'a> {
             return false;
         }
         
-        // Only check every hour (60 timesteps)
-        if k % 60 != 0 {
-            return false;
-        }
-        
+        // Track inactivity every timestep (removed hourly restriction)
         self.inactivity_check_count += 1;
+        
         
         // Count current active positions (both long and short)
         let current_position_count = self.positions.long.len() + self.positions.short.len();
         let required_positions = self.bot_params_pair.long.n_positions + self.bot_params_pair.short.n_positions;
         
-        // Check 1: Position count requirement
+        // Check 1: Position count requirement - always track metrics
         if current_position_count < required_positions {
             if self.insufficient_positions_since.is_none() {
                 // First time we dropped below required positions
                 self.insufficient_positions_since = Some(k);
             } else {
-                // Check how long we've been insufficient
+                // Track how long we've been insufficient
                 let hours_insufficient = (k - self.insufficient_positions_since.unwrap()) / 60;
-                let max_hours_without_position = 24 * self.backtest_params.max_days_without_position;
+                let days_insufficient = hours_insufficient as f64 / 24.0;
                 
-                if hours_insufficient >= max_hours_without_position {
-                    println!("BANKRUPTCY: Insufficient positions for {} hours at timestep {}/{} (have: {}, need: {}, max hours: {})", 
-                             hours_insufficient, k, self.hlcvs.shape()[0] - 1, current_position_count, required_positions, max_hours_without_position);
-                    return true;
+                // Update max days without position metric
+                if days_insufficient > self.max_days_without_position {
+                    self.max_days_without_position = days_insufficient;
+                }
+                
+                // Check for bankruptcy if enabled
+                if self.backtest_params.enable_inactivity_bankruptcy {
+                    let max_hours_without_position = 24 * self.backtest_params.max_days_without_position;
+                    
+                    if hours_insufficient >= max_hours_without_position {
+                        println!("\x1b[33m💤 BANKRUPTCY (INACTIVITY - NO POSITIONS): Insufficient positions for {} hours at timestep {}/{} (have: {}, need: {}, max hours: {})\x1b[0m", 
+                                 hours_insufficient, k, self.hlcvs.shape()[0] - 1, current_position_count, required_positions, max_hours_without_position);
+                        return true;
+                    }
                 }
             }
         } else {
@@ -379,21 +392,33 @@ impl<'a> Backtest<'a> {
             self.insufficient_positions_since = None;
         }
         
-        // Check 2: Individual position staleness
-        let max_hours_stale = 24 * self.backtest_params.max_days_with_stale_position;
-        
-        for (&coin_idx, &timestamp_opt) in &self.position_timestamps {
-            if let Some(timestamp) = timestamp_opt {
+        // Check 2: Individual position staleness - always track metrics
+        // Check long positions
+        // We dont care about short positions
+        for (&coin_idx, _position) in &self.positions.long {
+            if let Some(timestamp) = self.position_timestamps.get(&coin_idx).and_then(|&t| t) {
                 let hours_since_trade = (k - timestamp) / 60;
-                if hours_since_trade >= max_hours_stale {
-                    println!("BANKRUPTCY: Stale position on coin {} ({}) at timestep {}/{}  for {} hours (max: {})", 
-                             coin_idx, self.backtest_params.coins[coin_idx], k, self.hlcvs.shape()[0] - 1,hours_since_trade, max_hours_stale);
-                    return true;
+                let days_since_trade = hours_since_trade as f64 / 24.0;
+                
+                // Update max days with stale position metric
+                if days_since_trade > self.max_days_with_stale_position {
+                    self.max_days_with_stale_position = days_since_trade;
+                }
+                
+                // Check for bankruptcy if enabled
+                if self.backtest_params.enable_inactivity_bankruptcy {
+                    let max_hours_stale = 24 * self.backtest_params.max_days_with_stale_position;
+                    
+                    if hours_since_trade >= max_hours_stale {
+                        println!("\x1b[35m🕰️  BANKRUPTCY (INACTIVITY - STALE POSITION): Stale long position on coin {} ({}) at timestep {}/{} for {} hours (max: {})\x1b[0m", 
+                                 coin_idx, self.backtest_params.coins[coin_idx], k, self.hlcvs.shape()[0] - 1, hours_since_trade, max_hours_stale);
+                        return true;
+                    }
                 }
             }
         }
         
-        false
+        false // Return false if bankruptcy is disabled or no bankruptcy conditions met
     }
 
     pub fn run(&mut self) -> (Vec<Fill>, Equities) {
@@ -459,7 +484,7 @@ impl<'a> Backtest<'a> {
             }
             self.update_equities(k);
             
-            // Check for inactivity bankruptcy
+            // Track inactivity metrics and check for inactivity bankruptcy if enabled
             if self.check_strategy_inactivity(k) && self.bankruptcy_timestamp.is_none() {
                 self.bankruptcy_timestamp = Some(k);
                 // Set equity to 0 to match financial bankruptcy
@@ -471,7 +496,7 @@ impl<'a> Backtest<'a> {
                 }
             }
             
-            // Check if bankruptcy was detected (either financial or inactivity)
+            // Check if bankruptcy was detected (financial or inactivity)
             if self.bankruptcy_timestamp.is_some() {
                 break;
             }
@@ -577,7 +602,7 @@ impl<'a> Backtest<'a> {
 
         // Check for bankruptcy before pushing to equities
         if equity_usd <= 15.0 && self.bankruptcy_timestamp.is_none() {
-            println!("BANKRUPTCY: Financial bankruptcy at timestep {}/{} (equity_usd: {:.2})", 
+            println!("\x1b[31m💸 BANKRUPTCY (FINANCIAL): Financial bankruptcy at timestep {}/{} (equity_usd: {:.2})\x1b[0m", 
                      k, self.hlcvs.shape()[0] - 1, equity_usd);
             self.bankruptcy_timestamp = Some(k);
             equity_usd = 0.0;
@@ -780,10 +805,6 @@ impl<'a> Backtest<'a> {
         );
         let mut adjusted_close_qty = close_fill.qty;
         if new_psize < 0.0 {
-            println!("warning: close qty greater than psize long");
-            println!("coin: {}", self.backtest_params.coins[idx]);
-            println!("new_psize: {}", new_psize);
-            println!("close order: {:?}", close_fill);
             new_psize = 0.0;
             adjusted_close_qty = -self.positions.long[&idx].size;
         }
@@ -809,6 +830,8 @@ impl<'a> Backtest<'a> {
             self.position_timestamps.insert(idx, None);
         } else {
             self.positions.long.get_mut(&idx).unwrap().size = new_psize;
+            // Update timestamp only if position still exists
+            self.position_timestamps.insert(idx, Some(k));
         }
         self.fills.push(Fill {
             index: k,                                      // index minute
@@ -825,9 +848,6 @@ impl<'a> Backtest<'a> {
             position_price: current_pprice,                // pprice after fill
             order_type: close_fill.order_type.clone(),     // fill type
         });
-        
-        // Update individual position timestamp for this coin (any trade activity)
-        self.position_timestamps.insert(idx, Some(k));
     }
 
     fn process_close_fill_short(&mut self, k: usize, idx: usize, order: &Order) {
@@ -837,10 +857,6 @@ impl<'a> Backtest<'a> {
         );
         let mut adjusted_close_qty = order.qty;
         if new_psize > 0.0 {
-            println!("warning: close qty greater than psize short");
-            println!("coin: {}", self.backtest_params.coins[idx]);
-            println!("new_psize: {}", new_psize);
-            println!("close order: {:?}", order);
             new_psize = 0.0;
             adjusted_close_qty = self.positions.short[&idx].size.abs();
         }
@@ -866,6 +882,8 @@ impl<'a> Backtest<'a> {
             self.position_timestamps.insert(idx, None);
         } else {
             self.positions.short.get_mut(&idx).unwrap().size = new_psize;
+            // Update timestamp only if position still exists
+            self.position_timestamps.insert(idx, Some(k));
         }
         self.fills.push(Fill {
             index: k,                                      // index minute
@@ -882,9 +900,6 @@ impl<'a> Backtest<'a> {
             position_price: current_pprice,                // pprice after fill
             order_type: order.order_type.clone(),          // fill type
         });
-        
-        // Update individual position timestamp for this coin (any trade activity)
-        self.position_timestamps.insert(idx, Some(k));
     }
 
     fn process_entry_fill_long(&mut self, k: usize, idx: usize, order: &Order) {
@@ -1688,7 +1703,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
 
     if fills.len() <= 1 {
         if bankruptcy_timestamp.is_none() {
-            println!("� NOO-TRADE STRATEGY WITHOUT BANKRUPTCY: fills={}, this should not happen with inactivity detection!", fills.len());
+            println!("\x1b[36m🤔 NO-TRADE STRATEGY WITHOUT BANKRUPTCY: fills={}, inactivity bankruptcy may be disabled\x1b[0m", fills.len());
         }
         
         let mut analysis = Analysis::default();
@@ -2092,14 +2107,14 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
 
     // Only log the truly impossible cases
     if analysis.drawdown_worst >= 1.0 && analysis.bankruptcy_timestamp.is_none() {
-        println!("🚨🚨🚨 IMPOSSIBLE: drawdown={:.6}, gain={:.2}, fills={}, NO_BANKRUPTCY", 
+        println!("\x1b[91m🚨🚨🚨 IMPOSSIBLE: drawdown={:.6}, gain={:.2}, fills={}, NO_BANKRUPTCY\x1b[0m", 
                  analysis.drawdown_worst, analysis.gain, fills.len());
-        println!("🚨🚨🚨 This is logically impossible - 100%% drawdown means equity hit ~$0!");
+        println!("\x1b[91m🚨🚨🚨 This is logically impossible - 100%% drawdown means equity hit ~$0!\x1b[0m");
     }
     
     // Log strategies that completed without any bankruptcy (successful strategies)
     if analysis.bankruptcy_timestamp.is_none() && fills.len() > 1 {
-        println!("✅ SUCCESSFUL STRATEGY: drawdown={:.3}, gain={:.2}, rsquared={:.5}", 
+        println!("\x1b[32m✅ SUCCESSFUL STRATEGY: drawdown={:.3}, gain={:.2}, rsquared={:.5}\x1b[0m", 
                  analysis.drawdown_worst, analysis.gain, analysis.rsquared);
     }
 
@@ -2177,8 +2192,14 @@ pub fn analyze_backtest_pair(
     equities: &Equities,
     use_btc_collateral: bool,
     bankruptcy_timestamp: Option<usize>,
+    max_days_without_position: f64,
+    max_days_with_stale_position: f64,
 ) -> (Analysis, Analysis) {
-    let analysis_usd = analyze_backtest(fills, &equities.usd, bankruptcy_timestamp);
+    let mut analysis_usd = analyze_backtest(fills, &equities.usd, bankruptcy_timestamp);
+    // Add the new metrics to the analysis
+    analysis_usd.days_without_position = max_days_without_position;
+    analysis_usd.days_with_stale_position = max_days_with_stale_position;
+    
     if !use_btc_collateral {
         return (analysis_usd.clone(), analysis_usd);
     }
@@ -2187,7 +2208,11 @@ pub fn analyze_backtest_pair(
         fill.balance_usd_total /= fill.btc_price; // Use actual BTC balance if available
         fill.pnl = fill.pnl / fill.btc_price; // Convert PNL to BTC
     }
-    let analysis_btc = analyze_backtest(&btc_fills, &equities.btc, bankruptcy_timestamp);
+    let mut analysis_btc = analyze_backtest(&btc_fills, &equities.btc, bankruptcy_timestamp);
+    // Add the new metrics to the BTC analysis as well
+    analysis_btc.days_without_position = max_days_without_position;
+    analysis_btc.days_with_stale_position = max_days_with_stale_position;
+    
     (analysis_usd, analysis_btc)
 }
 

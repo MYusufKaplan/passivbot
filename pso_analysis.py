@@ -983,6 +983,9 @@ class PSOAnalyzer:
         print(f"   ✅ Massive efficiency gains while preserving discovery potential")
         print(f"   ✅ Reduced risk of local minima compared to fixed parameters")
         
+        # Generate bounds comparison and output file
+        self.generate_bounds_comparison(all_recommendations)
+        
         return {
             'high_impact': high_impact,
             'medium_impact': medium_impact,
@@ -991,6 +994,211 @@ class PSOAnalyzer:
             'space_reduction_pct': space_reduction,
             'best_params': best_params
         }
+
+    def generate_bounds_comparison(self, recommendations):
+        """Compare suggested bounds with normalize bounds and generate encapsulating bounds file"""
+        print("\n" + "="*80)
+        print("📊 BOUNDS COMPARISON AND GENERATION")
+        print("="*80)
+        
+        # Load normalize bounds
+        normalize_bounds_file = 'configs/optimize_normalBounds.json'
+        normalize_bounds = {}
+        
+        try:
+            import json
+            with open(normalize_bounds_file, 'r') as f:
+                normalize_config = json.load(f)
+                normalize_bounds = normalize_config.get('optimize', {}).get('bounds', {})
+            print(f"✅ Loaded normalize bounds from {normalize_bounds_file}")
+        except Exception as e:
+            print(f"⚠️ Could not load normalize bounds: {e}")
+            print("   Proceeding with suggested bounds only...")
+        
+        # Load current bounds from optimize.json
+        current_bounds_file = 'configs/optimize.json'
+        current_bounds = {}
+        
+        try:
+            with open(current_bounds_file, 'r') as f:
+                current_config = json.load(f)
+                current_bounds = current_config.get('optimize', {}).get('bounds', {})
+            print(f"✅ Loaded current bounds from {current_bounds_file}")
+        except Exception as e:
+            print(f"⚠️ Could not load current bounds: {e}")
+            print("   Proceeding without current bounds comparison...")
+        
+        # Create ordered encapsulating bounds following current_bounds order
+        encapsulating_bounds = {}
+        comparison_data = []
+        
+        # Create lookup dictionaries for recommendations
+        recommendations_dict = {rec['parameter']: rec for rec in recommendations}
+        
+        # Process parameters in the order they appear in current_bounds
+        for param_name in current_bounds.keys():
+            current_min, current_max = current_bounds[param_name]
+            
+            if param_name.startswith('short_'):
+                # For short parameters, use normalize bounds (fixed values)
+                if param_name in normalize_bounds:
+                    encapsulating_bounds[param_name] = normalize_bounds[param_name]
+                else:
+                    encapsulating_bounds[param_name] = [current_min, current_max]
+                    
+            elif param_name.startswith('long_'):
+                # For long parameters, calculate encapsulating bounds
+                if param_name in recommendations_dict:
+                    rec = recommendations_dict[param_name]
+                    suggested_min = rec['suggested_min']
+                    suggested_max = rec['suggested_max']
+                    
+                    # Get normalize bounds if available
+                    if param_name in normalize_bounds:
+                        normalize_min, normalize_max = normalize_bounds[param_name]
+                        
+                        # Calculate encapsulating bounds (smallest range that contains both)
+                        encap_min = min(suggested_min, normalize_min)
+                        encap_max = max(suggested_max, normalize_max)
+                        
+                        comparison_data.append({
+                            'parameter': param_name,
+                            'suggested_min': suggested_min,
+                            'suggested_max': suggested_max,
+                            'current_min': current_min,
+                            'current_max': current_max,
+                            'normalize_min': normalize_min,
+                            'normalize_max': normalize_max,
+                            'encap_min': encap_min,
+                            'encap_max': encap_max,
+                            'suggested_range': suggested_max - suggested_min,
+                            'current_range': current_max - current_min,
+                            'normalize_range': normalize_max - normalize_min,
+                            'encap_range': encap_max - encap_min
+                        })
+                        
+                        encapsulating_bounds[param_name] = [encap_min, encap_max]
+                        
+                    else:
+                        # No normalize bounds available, use suggested bounds
+                        encapsulating_bounds[param_name] = [suggested_min, suggested_max]
+                        comparison_data.append({
+                            'parameter': param_name,
+                            'suggested_min': suggested_min,
+                            'suggested_max': suggested_max,
+                            'current_min': current_min,
+                            'current_max': current_max,
+                            'normalize_min': None,
+                            'normalize_max': None,
+                            'encap_min': suggested_min,
+                            'encap_max': suggested_max,
+                            'suggested_range': suggested_max - suggested_min,
+                            'current_range': current_max - current_min,
+                            'normalize_range': None,
+                            'encap_range': suggested_max - suggested_min
+                        })
+                else:
+                    # Long parameter not in recommendations, use normalize bounds or current bounds
+                    if param_name in normalize_bounds:
+                        encapsulating_bounds[param_name] = normalize_bounds[param_name]
+                        print(f"   ℹ️ Added missing long_* parameter from normalize bounds: {param_name}")
+                    else:
+                        encapsulating_bounds[param_name] = [current_min, current_max]
+                        print(f"   ℹ️ Added missing long_* parameter from current bounds: {param_name}")
+        
+        # Add any parameters that exist in normalize_bounds but not in current_bounds
+        for param_name, bounds in normalize_bounds.items():
+            if param_name not in encapsulating_bounds:
+                encapsulating_bounds[param_name] = bounds
+                print(f"   ℹ️ Added parameter from normalize bounds not in current: {param_name}")
+        
+        # Display comparison table
+        print(f"\n📋 BOUNDS COMPARISON TABLE (long_* parameters only):")
+        print("-" * 150)
+        print(f"{'Parameter':<35} {'Suggested Range':<25} {'Current Range':<25} {'Normalize Range':<25} {'Encapsulating Range':<25}")
+        print("-" * 150)
+        
+        for data in comparison_data:
+            param = data['parameter']
+            
+            # Format suggested range
+            sugg_range = f"[{data['suggested_min']:.6f}, {data['suggested_max']:.6f}]"
+            
+            # Format current range
+            if data['current_min'] is not None and data['current_max'] is not None:
+                curr_range = f"[{data['current_min']:.6f}, {data['current_max']:.6f}]"
+            else:
+                curr_range = "N/A"
+            
+            # Format normalize range
+            if data['normalize_min'] is not None:
+                norm_range = f"[{data['normalize_min']:.6f}, {data['normalize_max']:.6f}]"
+            else:
+                norm_range = "N/A"
+            
+            # Format encapsulating range
+            encap_range = f"[{data['encap_min']:.6f}, {data['encap_max']:.6f}]"
+            
+            print(f"{param:<35} {sugg_range:<25} {curr_range:<25} {norm_range:<25} {encap_range:<25}")
+        
+        # Count parameters by type
+        long_params = [k for k in encapsulating_bounds.keys() if k.startswith('long_')]
+        short_params = [k for k in encapsulating_bounds.keys() if k.startswith('short_')]
+        
+        # Create ordered bounds dictionary following the order from current bounds
+        ordered_bounds = {}
+        
+        # First, add parameters in the order they appear in current_bounds
+        for param_name in current_bounds.keys():
+            if param_name in encapsulating_bounds:
+                ordered_bounds[param_name] = encapsulating_bounds[param_name]
+        
+        # Then add any remaining parameters that weren't in current_bounds
+        for param_name, bounds in encapsulating_bounds.items():
+            if param_name not in ordered_bounds:
+                ordered_bounds[param_name] = bounds
+        
+        # Generate bounds.json file with proper structure and ordering
+        bounds_output = encapsulating_bounds
+        
+        output_file = 'bounds.json'
+        try:
+            with open(output_file, 'w') as f:
+                json.dump(bounds_output, f, indent=2)
+            
+            print(f"\n✅ Generated encapsulating bounds file: {output_file}")
+            print(f"   📊 Contains {len(long_params)} long_* parameters (optimized)")
+            print(f"   📊 Contains {len(short_params)} short_* parameters (fixed)")
+            print(f"   📊 Total parameters: {len(encapsulating_bounds)}")
+            print(f"   🔄 Parameter order: Preserved from configs/optimize.json")
+            
+            # Calculate space efficiency
+            total_suggested_space = 1.0
+            total_normalize_space = 1.0
+            total_encap_space = 1.0
+            
+            params_with_both = [d for d in comparison_data if d['normalize_min'] is not None]
+            
+            if params_with_both:
+                for data in params_with_both:
+                    total_suggested_space *= data['suggested_range']
+                    total_normalize_space *= data['normalize_range']
+                    total_encap_space *= data['encap_range']
+                
+                if total_normalize_space > 0:
+                    efficiency_vs_normalize = (1 - total_encap_space / total_normalize_space) * 100
+                    expansion_vs_suggested = (total_encap_space / total_suggested_space - 1) * 100
+                    
+                    print(f"\n📈 SPACE EFFICIENCY METRICS (long_* parameters only):")
+                    print(f"   🎯 Encapsulating vs Normalize: {efficiency_vs_normalize:.1f}% reduction")
+                    print(f"   📏 Encapsulating vs Suggested: {expansion_vs_suggested:.1f}% expansion")
+                    print(f"   ⚖️  Balance: Maintains exploration while improving efficiency")
+                    print(f"   🔒 Short parameters: Fixed at normalize bounds (no optimization)")
+            
+        except Exception as e:
+            print(f"❌ Error generating bounds file: {e}")
+        
+        return encapsulating_bounds, comparison_data
 
     def _assess_analysis_reliability(self):
         """Assess and warn about analysis reliability issues"""
