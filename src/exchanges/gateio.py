@@ -50,6 +50,7 @@ class GateIOBot(Passivbot):
             }
         )
         self.ccp.options["defaultType"] = "swap"
+        self.ccp.options["unified"] = True  # Enable unified account mode
         self.cca = getattr(ccxt_async, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -58,6 +59,7 @@ class GateIOBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
+        self.cca.options["unified"] = True  # Enable unified account mode
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -80,26 +82,25 @@ class GateIOBot(Passivbot):
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
         # call some endpoint which includes timestamp for exchange's server
-        # if timestamp is not included in self.cca.fetch_balance(),
-        # implement method in exchange child class
+        # Gate.io: use ohlcv instead of balance for UTC offset since balance doesn't include timestamp
         result = await self.cca.fetch_ohlcv("BTC/USDT:USDT", timeframe="1m")
         self.utc_offset = round((result[-1][0] - utc_ms()) / (1000 * 60 * 60)) * (1000 * 60 * 60)
         if verbose:
             logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
     async def watch_balance(self):
-        # hyperliquid ccxt watch balance not supported.
+        # Gate.io ccxt watch balance not supported.
         # relying instead on periodic REST updates
         res = None
         while True:
             try:
                 if self.stop_websocket:
                     break
-                res = await self.cca.fetch_balance()
-                res[self.quote]["total"] = float(res["info"]["marginSummary"]["accountValue"]) - sum(
-                    [float(x["position"]["unrealizedPnl"]) for x in res["info"]["assetPositions"]]
-                )
-                self.handle_balance_update(res)
+                res = await self.fetch_balance_unified()
+                balance_usdt = self.extract_balance_from_unified(res)
+                # Create balance update in expected format
+                balance_update = {self.quote: {"total": balance_usdt}}
+                self.handle_balance_update(balance_update)
                 await asyncio.sleep(10)
             except Exception as e:
                 logging.error(f"exception watch_balance {res} {e}")
@@ -147,17 +148,61 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
             return False
 
+    async def fetch_balance_unified(self):
+        """Fetch balance with unified account support"""
+        try:
+            # Try unified account balance first
+            balance = await self.cca.fetch_balance(params={'type': 'unified'})
+            return balance
+        except Exception as e:
+            # Fallback to regular futures balance
+            try:
+                balance = await self.cca.fetch_balance(params={'type': 'swap'})
+                return balance
+            except Exception as e2:
+                # Final fallback to default balance
+                balance = await self.cca.fetch_balance()
+                return balance
+
+    def extract_balance_from_unified(self, balance):
+        """Extract USDT balance from Gate.io unified account structure"""
+        balance_usdt = 0.0
+        
+        # Handle Gate.io unified/swap account balance structure
+        # Check if we have the info array structure (Gate.io unified/swap accounts)
+        if 'info' in balance and isinstance(balance['info'], list):
+            for item in balance['info']:
+                if item.get('currency') == 'USDT':
+                    # For Gate.io unified accounts, use available balance as the primary balance
+                    # This represents the actual usable balance
+                    balance_usdt = float(item.get('available', 0))
+                    break
+        else:
+            # Fallback to standard CCXT structure
+            if 'USDT' in balance.get('total', {}):
+                balance_usdt = balance['total']['USDT']
+        
+        # If still 0, try the free balance from CCXT structure (Gate.io unified accounts often have total=0)
+        if balance_usdt == 0.0 and 'USDT' in balance.get('free', {}):
+            balance_usdt = balance['free']['USDT']
+        
+        return balance_usdt
+
     async def fetch_positions(self) -> ([dict], float):
         positions, balance = None, None
         try:
             positions_fetched, balance = await asyncio.gather(
-                self.cca.fetch_positions(), self.cca.fetch_balance()
+                self.cca.fetch_positions(), self.fetch_balance_unified()
             )
             if not hasattr(self, "uid") or not self.uid:
-                self.uid = balance["info"][0]["user"]
-                self.cca.uid = self.uid
-                self.ccp.uid = self.uid
-            balance = balance[self.quote]["total"]
+                # Extract uid from balance info
+                if 'info' in balance and isinstance(balance['info'], list) and balance['info']:
+                    self.uid = balance["info"][0]["user"]
+                    self.cca.uid = self.uid
+                    self.ccp.uid = self.uid
+            
+            balance_usdt = self.extract_balance_from_unified(balance)
+            
             positions = []
             for x in positions_fetched:
                 if x["contracts"] != 0.0:
@@ -165,7 +210,7 @@ class GateIOBot(Passivbot):
                     x["price"] = x["entryPrice"]
                     x["position_side"] = x["side"]
                     positions.append(x)
-            return positions, balance
+            return positions, balance_usdt
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
             print_async_exception(positions)

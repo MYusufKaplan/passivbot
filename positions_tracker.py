@@ -29,8 +29,12 @@ gate = ccxt.gateio({
     'apiKey': API_KEY,
     'secret': API_SECRET,
     'enableRateLimit': True,
-    'options': {'defaultType': 'swap'}
+    'options': {
+        'defaultType': 'swap',
+        'unified': True  # Enable unified account mode
+    }
 })
+
 
 console = Console(force_terminal=True, no_color=False, color_system="truecolor", log_path=False, width=191)
 
@@ -55,6 +59,23 @@ def interpolate_color(percent, side):
     g = int(start_rgb[1] + (end_rgb[1] - start_rgb[1]) * percent / 100)
     b = int(start_rgb[2] + (end_rgb[2] - start_rgb[2]) * percent / 100)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+def fetch_balance_unified():
+    """Fetch balance with unified account support"""
+    try:
+        x = gate.balance
+        y = gate.currencies
+        # Try unified account balance first
+        balance = gate.fetch_balance(params={'type': 'unified'})
+        return balance
+    except Exception as e:
+        # Fallback to regular futures balance
+        try:
+            balance = gate.fetch_balance(params={'type': 'swap'})
+            return balance
+        except Exception as e2:
+            # Final fallback to default balance
+            return gate.fetch_balance()
 
 def fetch_active_positions(max_count=3):
     positions = gate.fetch_positions()
@@ -230,6 +251,103 @@ def get_price_changes(symbol):
             changes[timeframe] = "Err"
     return changes
 
+def create_sparkline(prices, width=30, execution_data=None):
+    """Create a simple ASCII sparkline from price data using bar characters with execution highlighting"""
+    if len(prices) < 2:
+        return "─" * width, 0, 0
+    
+    min_price = min(prices)
+    max_price = max(prices)
+    
+    if max_price == min_price:
+        return "─" * width, min_price, max_price
+    
+    # Bar characters for different price levels
+    chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    normalized = []
+    
+    for i, price in enumerate(prices):
+        norm = (price - min_price) / (max_price - min_price)
+        char_idx = min(int(norm * (len(chars) - 1)), len(chars) - 1)
+        char = chars[char_idx]
+        
+        # Check if this bar has executions and color accordingly
+        if execution_data and i in execution_data:
+            if execution_data[i] == 'buy':
+                char = f"[blue]{char}[/blue]"
+            elif execution_data[i] == 'sell':
+                char = f"[purple]{char}[/purple]"
+        
+        normalized.append(char)
+    
+    # Truncate or pad to desired width
+    if len(normalized) > width:
+        # Take the most recent data points
+        normalized = normalized[-width:]
+    elif len(normalized) < width:
+        # Pad with the last character (without color tags for padding)
+        last_char = normalized[-1] if normalized else "─"
+        # Strip color tags for padding
+        if "[" in last_char and "]" in last_char:
+            # Extract just the character without color tags
+            import re
+            clean_char = re.sub(r'\[.*?\]', '', last_char)
+            normalized.extend([clean_char] * (width - len(normalized)))
+        else:
+            normalized.extend([last_char] * (width - len(normalized)))
+    
+    chart = "".join(normalized)
+    return chart, min_price, max_price
+
+def get_sparkline_data(symbol, timeframe="15m", limit=30):
+    """Fetch recent price data for sparkline with timestamps"""
+    try:
+        ohlcv = gate.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        if ohlcv:
+            # Return both prices and timestamps
+            prices = [candle[4] for candle in ohlcv]
+            timestamps = [candle[0] for candle in ohlcv]
+            return prices, timestamps
+        return [], []
+    except Exception as e:
+        return [], []
+
+def fetch_recent_trades(symbol, limit=100):
+    """Fetch recent trade history from Gate.io"""
+    try:
+        # Fetch recent trades for this symbol
+        trades = gate.fetch_my_trades(symbol, limit=limit)
+        return trades
+    except Exception as e:
+        console.log(f"[red]❌ Failed fetching trades for {symbol}[/]: {e}")
+        return []
+
+def map_executions_to_sparkline(trades, timestamps, timeframe_ms=15*60*1000):
+    """Map trade executions to sparkline bar indices"""
+    execution_data = {}
+    
+    # Only consider trades from the last 24 hours to match sparkline timeframe
+    cutoff_time = timestamps[0] if timestamps else (time.time() * 1000 - 24*60*60*1000)
+    
+    for trade in trades:
+        trade_time = trade['timestamp']
+        trade_side = trade['side']  # 'buy' or 'sell'
+        
+        # Skip trades older than our sparkline data
+        if trade_time < cutoff_time:
+            continue
+            
+        # Find which sparkline bar this trade belongs to
+        for i, bar_timestamp in enumerate(timestamps):
+            # Check if trade falls within this 15-minute bar
+            if bar_timestamp <= trade_time < (bar_timestamp + timeframe_ms):
+                # If multiple trades in same bar, prioritize sell over buy for visibility
+                if i not in execution_data or trade_side == 'sell':
+                    execution_data[i] = trade_side
+                break
+    
+    return execution_data
+
 
 def build_position_panel(visual_symbol, symbol, position, current_price, orders, balance, all_positions=None):
     try_price = fetch_usdt_try_price()
@@ -337,11 +455,39 @@ def build_position_panel(visual_symbol, symbol, position, current_price, orders,
         )
         progress_renderables.append(progress.get_renderable())
 
-    # Info panel
+    # Get sparkline data and price changes
+    sparkline_prices, sparkline_timestamps = get_sparkline_data(symbol, "15m", 30)
+    
+    # Fetch recent trades and map to sparkline bars
+    execution_data = None
+    if sparkline_timestamps:
+        recent_trades = fetch_recent_trades(symbol, limit=100)
+        execution_data = map_executions_to_sparkline(recent_trades, sparkline_timestamps)
+    
+    sparkline, low_price, high_price = create_sparkline(sparkline_prices, width=30, execution_data=execution_data)
+    price_changes = get_price_changes(symbol)
+    
+    # Determine sparkline color based on current price position within range
+    sparkline_color = "green"
+    if low_price != high_price:  # Avoid division by zero
+        # Calculate percentile of current price within sparkline range
+        price_percentile = (current_price - low_price) / (high_price - low_price)
+        price_percentile = max(0.0, min(1.0, price_percentile))  # Clamp to 0-1
+        
+        # Create smoother color transition with minimum color values to avoid pure colors
+        # Red component: high when price is low (add 50 minimum to avoid pure green)
+        red_component = int(50 + 205 * (1 - price_percentile))
+        # Green component: high when price is high (add 50 minimum to avoid pure red)  
+        green_component = int(50 + 205 * price_percentile)
+        sparkline_color = f"#{red_component:02x}{green_component:02x}00"
+
+    # Info panel with sparkline
     info = Table.grid(padding=0)
     info.add_row(f"[bold]📈 Symbol:[/] {visual_symbol}")
     info.add_row(f"[bold]🎯 Position:[/] {position['contracts']} contracts")
     info.add_row(f"[bold]💰 Current Price:[/] {price_str}")
+    info.add_row(f"[bold]📊 15m Chart:[/] [{sparkline_color}]{sparkline}[/{sparkline_color}] Low: {low_price:.5f} High: {high_price:.5f}")
+    info.add_row(f"[bold]📈 Changes:[/] 5m:{price_changes.get('5m', 'N/A')} 15m:{price_changes.get('15m', 'N/A')} 1h:{price_changes.get('1h', 'N/A')} 1d:{price_changes.get('1d', 'N/A')}")
     info.add_row(f"[bold]🧮 Unrealized PnL:[/] [{pnl_color}]{unrealized_pnl:.5f} ({(unrealized_pnl * try_price):.5f}₺)[/{pnl_color}]")
     info.add_row(f"[bold]✅ Realized PnL:[/] {realized_pnl:.5f} ({(realized_pnl * try_price):.5f}₺)")
     info.add_row(f"[bold]⚖️ Break-Even Price:[/] {break_even_price:.5f}" if break_even_price else "[bold]⚖️ Break-Even Price:[/] —")
@@ -369,7 +515,33 @@ def build_position_panel(visual_symbol, symbol, position, current_price, orders,
 
 def build_account_metrics_panel(balance, all_positions):
     try_price = fetch_usdt_try_price()
-    balance_usdt = balance['total']['USDT']
+    
+    # Handle Gate.io unified/swap account balance structure
+    balance_usdt = 0.0
+    free_usdt = 0.0
+    used_usdt = 0.0
+    
+    # Check if we have the info array structure (Gate.io unified/swap accounts)
+    if 'info' in balance and isinstance(balance['info'], list):
+        for item in balance['info']:
+            if item.get('currency') == 'USDT':
+                # For Gate.io, available is the free balance
+                free_usdt = float(item.get('available', 0))
+                # Position margin + order margin = used balance
+                position_margin = float(item.get('position_margin', 0))
+                order_margin = float(item.get('order_margin', 0))
+                position_initial_margin = float(item.get('position_initial_margin', 0))
+                used_usdt = position_margin + order_margin + position_initial_margin
+                # Total = available + used
+                balance_usdt = free_usdt + used_usdt
+                break
+    else:
+        # Fallback to standard CCXT structure
+        if 'USDT' in balance.get('total', {}):
+            balance_usdt = balance['total']['USDT']
+            free_usdt = balance['free']['USDT'] 
+            used_usdt = balance['used']['USDT']
+            debt_usdt = balance['debt']['USDT']
     
     # Calculate total unrealized PnL from all active positions
     total_unrealized_pnl = 0.0
@@ -377,7 +549,7 @@ def build_account_metrics_panel(balance, all_positions):
         for pos in all_positions:
             total_unrealized_pnl += float(pos['unrealizedPnl'])
     
-    equity_usdt = (balance_usdt + total_unrealized_pnl) 
+    equity_usdt = (balance_usdt - debt_usdt + total_unrealized_pnl) 
     equity_try = equity_usdt * try_price
     profit_try = equity_try - 209000
 
@@ -389,8 +561,8 @@ def build_account_metrics_panel(balance, all_positions):
     
     balance_table.add_row(
         f"[bold]💰 Total Equity:[/] {equity_usdt:.2f} USDT",
-        f"[bold]🔓 Free Balance:[/] {balance['free']['USDT']:.2f} USDT",
-        f"[bold]📉 Used Margin:[/] {balance['used']['USDT']:.2f} USDT",
+        f"[bold]🔓 Free Balance:[/] {free_usdt:.2f} USDT",
+        f"[bold]📉 Used Margin:[/] {used_usdt:.2f} USDT",
         f"[bold]💰 Equity TRY:[/] {equity_try:.2f}₺ (Profit: {profit_try:+.2f}₺)"
     )
     
@@ -429,6 +601,9 @@ def main():
     first_run = True
     previous_positions = {}
     previous_orders = {}
+    # Suppress false sell sounds right after a buy fill triggers ladder adjustments
+    sell_suppress_until = {}
+
 
 
     with Live(console=console, refresh_per_second=1, screen=False) as live:
@@ -447,43 +622,63 @@ def main():
 
                 idle_time = 0
                 
-                # Process all positions for sound detection
+                # Determine symbol set changes for position start/end
+                current_symbols = {p['symbol'] for p in positions}
+                previous_symbols = set(previous_positions.keys())
+                started_symbols = current_symbols - previous_symbols
+                ended_symbols = previous_symbols - current_symbols
+
+                if not first_run:
+                    for sym in started_symbols:
+                        play_sound("sounds/position_start.wav")
+                    for sym in ended_symbols:
+                        play_sound("sounds/postion_end.wav")
+                        # Cleanup state for ended symbols
+                        previous_positions.pop(sym, None)
+                        previous_orders.pop(sym, None)
+                        sell_suppress_until.pop(sym, None)
+
+                # Process all active positions for order-based sounds
                 for pos in positions:
                     pos_symbol = pos['symbol']
                     pos_orders = fetch_orders(pos_symbol)
                     
-                    # Detect state changes — skip sounds on first loop
-                    prev_pos = previous_positions.get(pos_symbol)
                     prev_orders = previous_orders.get(pos_symbol, [])
 
                     if not first_run:
-                        # Position start
-                        if not prev_pos and pos:
-                            play_sound("sounds/position_start.wav")
-
-                        # Position end
-                        if prev_pos and not pos:
-                            play_sound("sounds/postion_end.wav")
-
-                        # New sell order
-                        prev_sell_ids = {o["id"] for o in prev_orders if o["side"].lower() == "sell"}
-                        new_sell_ids = {o["id"] for o in pos_orders if o["side"].lower() == "sell"}
-                        if new_sell_ids - prev_sell_ids:
-                            play_sound("sounds/sell.wav")
-
-                        # Removed buy order
+                        # Check for removed buy orders (buy fill)
                         prev_buy_ids = {o["id"] for o in prev_orders if o["side"].lower() == "buy"}
                         new_buy_ids = {o["id"] for o in pos_orders if o["side"].lower() == "buy"}
-                        if prev_buy_ids - new_buy_ids:
+                        buy_orders_removed = prev_buy_ids - new_buy_ids
+                        
+                        if buy_orders_removed:
                             play_sound("sounds/buy.wav")
+                            # Suppress sell sounds briefly to avoid false positives from ladder adjustments
+                            sell_suppress_until[pos_symbol] = time.time() + 3.0
 
+                        # Check for removed sell orders (sell fill)
+                        prev_sell_ids = {o["id"] for o in prev_orders if o["side"].lower() == "sell"}
+                        new_sell_ids = {o["id"] for o in pos_orders if o["side"].lower() == "sell"}
+                        sell_orders_removed = prev_sell_ids - new_sell_ids
+                        sell_orders_added = new_sell_ids - prev_sell_ids
+ 
+                        # If a buy order was filled, the bot might adjust the sell ladder.
+                        # We should not play a sell sound in that case.
+                        suppress_active = time.time() < sell_suppress_until.get(pos_symbol, 0)
+                        if not buy_orders_removed and not suppress_active:
+                            # A true sell fill is a removed order.
+                            # An adjustment (recreate) is a removed and an added order.
+                            is_sell_adjustment = sell_orders_removed and sell_orders_added
+                            if sell_orders_removed and not is_sell_adjustment:
+                                play_sound("sounds/sell.wav")
+ 
                     # Save state for next loop
                     previous_positions[pos_symbol] = pos
                     previous_orders[pos_symbol] = pos_orders
 
                 # Build position panels
                 position_panels = []
-                balance = gate.fetch_balance()
+                balance = fetch_balance_unified()
                 
                 for position in positions:
                     symbol = position['symbol']
@@ -504,26 +699,12 @@ def main():
                 header.add_column(justify="center")
                 header.add_row(f"[dim]{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/]")
 
-                # Layout based on number of positions
-                if len(position_panels) == 1:
-                    # Single position - full width
-                    layout = Group(
-                        header,
-                        position_panels[0],
-                        account_panel
-                    )
-                else:
-                    # Multiple positions - side by side using table
-                    positions_table = Table.grid(padding=1, expand=True)
-                    for _ in range(len(position_panels)):
-                        positions_table.add_column(ratio=1)
-                    positions_table.add_row(*position_panels)
-                    
-                    layout = Group(
-                        header,
-                        positions_table,
-                        account_panel
-                    )
+                # Layout - always vertical stacking
+                layout_components = [header]
+                layout_components.extend(position_panels)
+                layout_components.append(account_panel)
+                
+                layout = Group(*layout_components)
 
                 live.update(layout)
                 
@@ -537,6 +718,7 @@ def main():
 if __name__ == "__main__":
     hide_cursor()
     try:
+        # fetch_balance_unified()
         main()
     except KeyboardInterrupt:
         show_cursor()

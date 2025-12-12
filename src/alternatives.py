@@ -585,7 +585,17 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
         checkpoint_interval=1,
         watch_path=WATCH_PATH
     )
+
+    optimizer.set_competition_config(
+        enable=False,
+        max_particles_per_cell=10,
+        stagnation_window=10,
+        eviction_percentage=40,
+        check_interval=1
+    )
     
+    optimizer.set_blacklist_config()
+
     optimizer.set_initialization_strategy('lhs')
     optimizer.set_velocity_boost_config(interval=10, fraction=0.50, enable=True, optimize_limits_len=5)
     # optimizer.set_scout_config(scout_percentage=0.2, lifecycle=50, performance_threshold=3.0, enable=True)

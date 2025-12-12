@@ -38,14 +38,7 @@ custom_theme = Theme({
     "debug": "magenta"
 })
 
-console = console = Console(
-            force_terminal=True, 
-            no_color=False, 
-            log_path=False, 
-            width=159,
-            color_system="truecolor",  # Force truecolor support
-            legacy_windows=False
-        )
+console = Console(force_terminal=True, no_color=False, log_path=False, width=159)
 console_logfile = Console(file=open("price_movements.log", "a"), force_terminal=True, color_system="truecolor", width=159)
 
 install(console=console)  # Pretty tracebacks in terminal
