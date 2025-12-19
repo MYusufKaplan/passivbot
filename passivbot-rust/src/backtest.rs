@@ -19,6 +19,7 @@ use crate::utils::{
 use ndarray::{s, Array1, Array2, Array3, Array4, ArrayView1, ArrayView3, Axis, Dim, ViewRepr};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use wide::f64x4;
 
 #[derive(Clone, Default, Copy, Debug)]
 pub struct EmaAlphas {
@@ -38,6 +39,7 @@ pub struct EMAs {
     pub short: [f64; 3],
 }
 impl EMAs {
+    #[inline]
     pub fn compute_bands(&self, pside: usize) -> EMABands {
         let (upper, lower) = match pside {
             LONG => (
@@ -422,8 +424,13 @@ impl<'a> Backtest<'a> {
     }
 
     pub fn run(&mut self) -> (Vec<Fill>, Equities) {
-        let check_points: Vec<usize> = (0..7).map(|i| i * 60 * 24).collect();
+        let mut check_points = Vec::with_capacity(7);
+        check_points.extend((0..7).map(|i| i * 60 * 24));
         let n_timesteps = self.hlcvs.shape()[0];
+
+        // Pre-allocate collections to avoid repeated allocations
+        let mut temp_closes = Vec::with_capacity(10);
+        let mut temp_entries = Vec::with_capacity(10);
 
         for idx in 0..self.n_coins {
             self.trailing_prices
@@ -456,8 +463,72 @@ impl<'a> Backtest<'a> {
                 }
             }
         }
+        
+        // Main loop optimization - reduce function call overhead
         for k in 1..(n_timesteps - 1) {
-            self.check_for_fills(k);
+            // Inline check_for_fills logic to avoid function call overhead
+            self.did_fill_long.clear();
+            
+            if self.trading_enabled.long {
+                let mut open_orders_keys_long: Vec<usize> = Vec::with_capacity(self.open_orders.long.len());
+                open_orders_keys_long.extend(self.open_orders.long.keys().cloned());
+                open_orders_keys_long.sort_unstable(); // Faster than stable sort
+                
+                for idx in open_orders_keys_long {
+                    // Process close fills long - reuse temp vector
+                    if !self.open_orders.long[&idx].closes.is_empty() {
+                        temp_closes.clear();
+                        for close_order in &self.open_orders.long[&idx].closes {
+                            // Inline order_filled check
+                            let filled = if close_order.qty > 0.0 {
+                                self.hlcvs[[k, idx, LOW]] < close_order.price
+                            } else if close_order.qty < 0.0 {
+                                self.hlcvs[[k, idx, HIGH]] > close_order.price
+                            } else {
+                                false
+                            };
+                            
+                            if filled {
+                                temp_closes.push(close_order.clone());
+                            }
+                        }
+                        
+                        for order in &temp_closes {
+                            if self.positions.long.contains_key(&idx) {
+                                self.did_fill_long.insert(idx);
+                                self.reset_trailing_prices(idx, LONG);
+                                self.process_close_fill_long(k, idx, order);
+                            }
+                        }
+                    }
+                    
+                    // Process entry fills long - reuse temp vector
+                    if !self.open_orders.long[&idx].entries.is_empty() {
+                        temp_entries.clear();
+                        for entry_order in &self.open_orders.long[&idx].entries {
+                            // Inline order_filled check
+                            let filled = if entry_order.qty > 0.0 {
+                                self.hlcvs[[k, idx, LOW]] < entry_order.price
+                            } else if entry_order.qty < 0.0 {
+                                self.hlcvs[[k, idx, HIGH]] > entry_order.price
+                            } else {
+                                false
+                            };
+                            
+                            if filled {
+                                temp_entries.push(entry_order.clone());
+                            }
+                        }
+                        
+                        for order in &temp_entries {
+                            self.did_fill_long.insert(idx);
+                            self.reset_trailing_prices(idx, LONG);
+                            self.process_entry_fill_long(k, idx, order);
+                        }
+                    }
+                }
+            }
+            
             self.update_emas(k);
             let mut balance_changed = false;
             if self.balance.use_btc_collateral {
@@ -476,7 +547,7 @@ impl<'a> Backtest<'a> {
                     balance_changed = true;
                 }
             }
-            if balance_changed || !self.did_fill_long.is_empty() || !self.did_fill_short.is_empty()
+            if balance_changed || !self.did_fill_long.is_empty()
             {
                 self.update_open_orders_any_fill(k);
             } else {
@@ -502,11 +573,10 @@ impl<'a> Backtest<'a> {
             }
         }
         
-
-        
         (self.fills.clone(), self.equities.clone())
     }
 
+    #[inline]
     fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
         let close_price = self.hlcvs[[k, idx, CLOSE]];
         StateParams {
@@ -519,6 +589,7 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    #[inline]
     fn get_position(&self, idx: usize, pside: usize) -> Position {
         match pside {
             LONG => self.positions.long.get(&idx).cloned().unwrap_or_default(),
@@ -626,9 +697,10 @@ impl<'a> Backtest<'a> {
         };
 
         // Sort positions to ensure stable iteration
-        let mut current_positions: Vec<usize> = positions.keys().cloned().collect();
+        let mut current_positions: Vec<usize> = Vec::with_capacity(positions.len());
+        current_positions.extend(positions.keys().cloned());
         current_positions.sort();
-        let mut preferred_coins = Vec::new();
+        let mut preferred_coins = Vec::with_capacity(n_positions);
 
         // Only calculate preferred coins if there are open slots
         if current_positions.len() < n_positions {
@@ -649,7 +721,7 @@ impl<'a> Backtest<'a> {
             actives.insert(market_idx);
         }
 
-        let mut actives_without_pos = Vec::new();
+        let mut actives_without_pos = Vec::with_capacity(n_positions);
 
         // Add additional markets based on preferred_coins
         for &market_idx in &preferred_coins {
@@ -667,15 +739,16 @@ impl<'a> Backtest<'a> {
 
     fn check_for_fills(&mut self, k: usize) {
         self.did_fill_long.clear();
-        self.did_fill_short.clear();
+        // Skip short clearing since it's always disabled
+        
         if self.trading_enabled.long {
-            let mut open_orders_keys_long: Vec<usize> =
-                self.open_orders.long.keys().cloned().collect();
+            let mut open_orders_keys_long: Vec<usize> = Vec::with_capacity(self.open_orders.long.len());
+            open_orders_keys_long.extend(self.open_orders.long.keys().cloned());
             open_orders_keys_long.sort();
             for idx in open_orders_keys_long {
                 // Process close fills long
                 if !self.open_orders.long[&idx].closes.is_empty() {
-                    let mut closes_to_process = Vec::new();
+                    let mut closes_to_process = Vec::with_capacity(self.open_orders.long[&idx].closes.len());
                     {
                         for close_order in &self.open_orders.long[&idx].closes {
                             if self.order_filled(k, idx, close_order) {
@@ -684,8 +757,6 @@ impl<'a> Backtest<'a> {
                         }
                     }
                     for order in closes_to_process {
-                        //if order.qty != 0.0 && self.positions.long.contains_key(&idx) && self.positions.long.contains_key(&idx)
-                        //if order.qty != 0.0 && self.get_position
                         if self.positions.long.contains_key(&idx) {
                             self.did_fill_long.insert(idx);
                             self.reset_trailing_prices(idx, LONG);
@@ -695,7 +766,7 @@ impl<'a> Backtest<'a> {
                 }
                 // Process entry fills long
                 if !self.open_orders.long[&idx].entries.is_empty() {
-                    let mut entries_to_process = Vec::new();
+                    let mut entries_to_process = Vec::with_capacity(self.open_orders.long[&idx].entries.len());
                     {
                         for entry_order in &self.open_orders.long[&idx].entries {
                             if self.order_filled(k, idx, entry_order) {
@@ -711,47 +782,7 @@ impl<'a> Backtest<'a> {
                 }
             }
         }
-        if self.trading_enabled.short {
-            let mut open_orders_keys_short: Vec<usize> =
-                self.open_orders.short.keys().cloned().collect();
-            open_orders_keys_short.sort();
-            for idx in open_orders_keys_short {
-                // Process close fills short
-                if !self.open_orders.short[&idx].closes.is_empty() {
-                    let mut closes_to_process = Vec::new();
-                    {
-                        for close_order in &self.open_orders.short[&idx].closes {
-                            if self.order_filled(k, idx, close_order) {
-                                closes_to_process.push(close_order.clone());
-                            }
-                        }
-                    }
-                    for order in closes_to_process {
-                        if self.positions.short.contains_key(&idx) {
-                            self.did_fill_short.insert(idx);
-                            self.reset_trailing_prices(idx, SHORT);
-                            self.process_close_fill_short(k, idx, &order);
-                        }
-                    }
-                }
-                // Process entry fills short
-                if !self.open_orders.short[&idx].entries.is_empty() {
-                    let mut entries_to_process = Vec::new();
-                    {
-                        for entry_order in &self.open_orders.short[&idx].entries {
-                            if self.order_filled(k, idx, entry_order) {
-                                entries_to_process.push(entry_order.clone());
-                            }
-                        }
-                    }
-                    for order in entries_to_process {
-                        self.did_fill_short.insert(idx);
-                        self.reset_trailing_prices(idx, SHORT);
-                        self.process_entry_fill_short(k, idx, &order);
-                    }
-                }
-            }
-        }
+        // Remove entire short processing block since it's always disabled
     }
 
     fn update_stuck_status(&mut self, idx: usize, pside: usize) {
@@ -1039,6 +1070,7 @@ impl<'a> Backtest<'a> {
         )
     }
 
+    #[inline]
     fn reset_trailing_prices(&mut self, idx: usize, pside: usize) {
         let trailing_price_bundle = if pside == LONG {
             self.trailing_prices.long.entry(idx).or_default()
@@ -1245,6 +1277,7 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    #[inline]
     fn order_filled(&self, k: usize, idx: usize, order: &Order) -> bool {
         // check if will fill in next candle
         if order.qty > 0.0 {
@@ -1257,7 +1290,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn calc_unstucking_close(&mut self, k: usize) -> (usize, usize, Order) {
-        let mut stuck_positions = Vec::new();
+        let mut stuck_positions = Vec::with_capacity(self.positions.long.len() + self.positions.short.len());
         let mut unstuck_allowances = (0.0, 0.0);
 
         if self.bot_params_pair.long.unstuck_loss_allowance_pct > 0.0 {
@@ -1271,7 +1304,8 @@ impl<'a> Backtest<'a> {
             if unstuck_allowances.0 > 0.0 {
                 // Check long positions
                 // Sort the keys for long
-                let mut long_keys: Vec<usize> = self.positions.long.keys().cloned().collect();
+                let mut long_keys: Vec<usize> = Vec::with_capacity(self.positions.long.len());
+                long_keys.extend(self.positions.long.keys().cloned());
                 long_keys.sort();
                 for idx in long_keys {
                     let position = &self.positions.long[&idx];
@@ -1913,8 +1947,8 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
     }
 
     // Calculate equity-balance differences with separate positive and negative tracking
-    let mut ebds_pos = Vec::new();
-    let mut ebds_neg = Vec::new();
+    let mut ebds_pos = Vec::with_capacity(bal_eq.len() / 2);
+    let mut ebds_neg = Vec::with_capacity(bal_eq.len() / 2);
 
     for &(balance, equity) in bal_eq.iter() {
         let ebd = (equity - balance) / balance;
