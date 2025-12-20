@@ -24,7 +24,8 @@ priority_metrics = ["mdg", "loss_profit_ratio", "position_held_hours_mean", "pos
 lower_better_metrics = [
     "drawdown_worst", "drawdown_worst_mean_1pct", "equity_balance_diff_neg_max",
     "equity_balance_diff_neg_mean", "expected_shortfall_1pct",
-    "loss_profit_ratio", "position_held_hours_mean", "position_unchanged_hours_max"
+    "loss_profit_ratio", "position_held_hours_mean", "position_unchanged_hours_max",
+    "days_without_position", "days_with_stale_position"
 ]
 others = ["n_positions", "total_wallet_exposure_limit"]
 
@@ -35,7 +36,8 @@ header_aliases = {
     "position_held_hours_mean": "Hrs/Pos", "position_unchanged_hours_max": "Unchg Max", "loss_profit_ratio": "LPR",
     "loss_profit_ratio_w": "LPR(w)", "calmar_ratio": "Calmar", "calmar_ratio_w": "Calmar(w)", "omega_ratio": "Omega",
     "omega_ratio_w": "Omega(w)", "sortino_ratio": "Sortino", "sortino_ratio_w": "Sortino(w)", "sterling_ratio": "Sterling",
-    "sterling_ratio_w": "Sterling(w)", "rsquared": "R²", "time_in_market_percent": "TiM %", "n_positions": "NPos", "total_wallet_exposure_limit": "W Exp"
+    "sterling_ratio_w": "Sterling(w)", "rsquared": "R²", "time_in_market_percent": "TiM %", "n_positions": "NPos", 
+    "total_wallet_exposure_limit": "W Exp", "days_without_position": "Days w/o Pos", "days_with_stale_position": "Days Stale"
 }
 
 def get_current_running_config():
@@ -185,7 +187,7 @@ def build_thematic_tables():
     tables = []
     performance_metrics = ["adg", "gadg", "mdg", "gain"]
     risk_metrics = ["drawdown_worst", "drawdown_worst_mean_1pct", "expected_shortfall_1pct", "loss_profit_ratio", "rsquared"]
-    position_metrics = ["position_held_hours_mean", "positions_held_per_day", "position_unchanged_hours_max", "time_in_market_percent"]
+    position_metrics = ["position_held_hours_mean", "positions_held_per_day", "position_unchanged_hours_max", "time_in_market_percent", "days_without_position", "days_with_stale_position"]
     ratio_metrics = ["sharpe_ratio", "calmar_ratio", "omega_ratio", "sortino_ratio", "sterling_ratio"]
     priority_table_metrics = elite_metrics + priority_metrics + others
     tables.append(build_colored_table(rows, performance_metrics, "📊 Performance Metrics"))

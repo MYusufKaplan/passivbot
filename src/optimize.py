@@ -729,8 +729,9 @@ class Evaluator:
             "DD Worst":         -99,
             "DD 1%":            -99,
             "Gain":             0,
-            "R²":               -99,
-            "Sharpe":           -99,
+            "R²":               1,
+            "Days w/o Pos":     0,
+            "Days Stale":       0
         }
         for result in results:
             key = result['key']
