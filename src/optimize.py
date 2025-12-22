@@ -145,10 +145,11 @@ def check_disk_space(path, required_space):
         )
 
 
-def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
+def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb, param_bounds=None):
     """
     A wrapper around DEAP's mutPolynomialBounded function to pre-process
     bounds and handle the case where lower and upper bounds may be equal.
+    Also handles discrete parameters like n_positions.
 
     Args:
         individual: Sequence individual to be mutated.
@@ -156,6 +157,7 @@ def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
         low: A value or sequence of values that is the lower bound of the search space.
         up: A value or sequence of values that is the upper bound of the search space.
         indpb: Independent probability for each attribute to be mutated.
+        param_bounds: Dictionary of parameter names to bounds for discrete handling.
 
     Returns:
         A tuple of one individual, mutated with consideration for equal lower and upper bounds.
@@ -180,6 +182,16 @@ def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
     for i, equal in enumerate(equal_bounds_mask):
         if equal:
             individual[i] = low[i]
+
+    # Handle discrete parameters
+    if param_bounds:
+        param_names = list(param_bounds.keys())
+        for i, param_name in enumerate(param_names):
+            if param_name == "long_n_positions" and np.random.random() < indpb:
+                # For n_positions, use discrete choice instead of continuous mutation
+                low_val, high_val = param_bounds[param_name]
+                choices = list(range(int(low_val), int(high_val) + 1))
+                individual[i] = float(np.random.choice(choices))
 
     return (individual,)
 
@@ -1123,7 +1135,12 @@ async def myMain(args):
 
     # Register attribute generators
     for i, (param_name, (low, high)) in enumerate(param_bounds.items()):
-        toolbox.register(f"attr_{i}", np.random.uniform, low, high)
+        if param_name == "long_n_positions":
+            # Use discrete choice for n_positions to give equal probability to each integer
+            choices = list(range(int(low), int(high) + 1))
+            toolbox.register(f"attr_{i}", lambda choices=choices: float(np.random.choice(choices)))
+        else:
+            toolbox.register(f"attr_{i}", np.random.uniform, low, high)
 
     def create_individual():
         return creator.Individual(
@@ -1152,6 +1169,7 @@ async def myMain(args):
         low=[low for low, high in param_bounds.values()],
         up=[high for low, high in param_bounds.values()],
         indpb=1.0 / len(param_bounds),
+        param_bounds=param_bounds,
     )
     toolbox.register("select", tools.selNSGA2)
 
@@ -1430,7 +1448,12 @@ async def main():
 
         # Register attribute generators
         for i, (param_name, (low, high)) in enumerate(param_bounds.items()):
-            toolbox.register(f"attr_{i}", np.random.uniform, low, high)
+            if param_name == "long_n_positions":
+                # Use discrete choice for n_positions to give equal probability to each integer
+                choices = list(range(int(low), int(high) + 1))
+                toolbox.register(f"attr_{i}", lambda choices=choices: float(np.random.choice(choices)))
+            else:
+                toolbox.register(f"attr_{i}", np.random.uniform, low, high)
 
         def create_individual():
             return creator.Individual(
@@ -1462,6 +1485,7 @@ async def main():
             low=[low for low, high in param_bounds.values()],
             up=[high for low, high in param_bounds.values()],
             indpb=1.0 / len(param_bounds),
+            param_bounds=param_bounds,
         )
         toolbox.register("select", tools.selNSGA2)
 
