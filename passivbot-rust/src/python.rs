@@ -179,6 +179,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         max_days_without_position: extract_value(dict, "max_days_without_position").unwrap_or(1),
         max_days_with_stale_position: extract_value(dict, "max_days_with_stale_position").unwrap_or(7),
         enable_inactivity_bankruptcy: extract_value(dict, "enable_inactivity_bankruptcy").unwrap_or(true),
+        max_drawdown: extract_value(dict, "max_drawdown").unwrap_or(1.0),
     })
 }
 

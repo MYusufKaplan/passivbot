@@ -31,6 +31,7 @@ pub struct BacktestParams {
     pub max_days_without_position: usize,
     pub max_days_with_stale_position: usize,
     pub enable_inactivity_bankruptcy: bool,
+    pub max_drawdown: f64,
 }
 
 #[derive(Default, Debug, Clone, Copy)]

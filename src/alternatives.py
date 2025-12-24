@@ -23,13 +23,14 @@ from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn, Ti
 # CMA-ES import
 import cmaes
 
+
 # PSO import
 try:
-    import pyswarms as ps
+    from my_pyswarms import global_best as ps
     PYSWARMS_AVAILABLE = True
 except ImportError:
     PYSWARMS_AVAILABLE = False
-    print("⚠️ PySwarms not installed. Install with: pip install pyswarms")
+    print("⚠️ Custom PySwarms not found. Make sure src/my_pyswarms exists.")
 
 # Nevergrad import
 try:
@@ -571,7 +572,7 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
     log_message(f"🔍 PSO options: {options}", emoji="🔍")
     
     # Create PSO optimizer with enhanced features
-    optimizer = ps.single.GlobalBestPSO(
+    optimizer = ps.GlobalBestPSO(
         n_particles=n_particles,
         dimensions=num_parameters,
         options=options,

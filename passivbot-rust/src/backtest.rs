@@ -155,6 +155,9 @@ pub struct Backtest<'a> {
     // New tracking fields for metrics instead of bankruptcy
     pub max_days_without_position: f64,
     pub max_days_with_stale_position: f64,
+    // Drawdown tracking for bankruptcy
+    peak_equity: f64,
+    current_drawdown: f64,
 }
 
 impl<'a> Backtest<'a> {
@@ -260,6 +263,9 @@ impl<'a> Backtest<'a> {
             // Initialize tracking metrics
             max_days_without_position: 0.0,
             max_days_with_stale_position: 0.0,
+            // Initialize drawdown tracking
+            peak_equity: backtest_params.starting_balance,
+            current_drawdown: 0.0,
         }
     }
 
@@ -678,6 +684,26 @@ impl<'a> Backtest<'a> {
             self.bankruptcy_timestamp = Some(k);
             equity_usd = 0.0;
             equity_btc = 0.0;
+        }
+        
+        // Check for drawdown bankruptcy
+        if self.bankruptcy_timestamp.is_none() {
+            // Update peak equity
+            if equity_usd > self.peak_equity {
+                self.peak_equity = equity_usd;
+            }
+            
+            // Calculate current drawdown
+            self.current_drawdown = (equity_usd - self.peak_equity) / self.peak_equity;
+            
+            // Check if drawdown exceeds threshold
+            if self.current_drawdown < -self.backtest_params.max_drawdown {
+                println!("\x1b[31m📉 BANKRUPTCY (DRAWDOWN): Max drawdown exceeded at timestep {}/{} (drawdown: {:.4}, max: {:.4}, equity: {:.2}, peak: {:.2})\x1b[0m", 
+                         k, self.hlcvs.shape()[0] - 1, -self.current_drawdown, self.backtest_params.max_drawdown, equity_usd, self.peak_equity);
+                self.bankruptcy_timestamp = Some(k);
+                equity_usd = 0.0;
+                equity_btc = 0.0;
+            }
         }
         
         // Finally push the results into the Equities struct
