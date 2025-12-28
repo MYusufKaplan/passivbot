@@ -292,6 +292,14 @@ class GlobalBestPSO(SwarmOptimizer):
         self.reinit_fraction = 0.70     # Boost worst Y% of particles
         self.enable_reinit = True       # Enable/disable velocity boost
         
+        # 10n selection attributes
+        self.enable_10n_selection = True           # Enable/disable 10n selection
+        self.selection_multiplier = 10             # Multiplier for candidate pool (10n)
+        self.selection_interval = 10               # Run selection every X iterations
+        self.selection_on_fresh_start = True       # Run on fresh start (iteration 0)
+        self.selection_on_checkpoint_resume = True # Run on checkpoint resume
+        self.selection_quality_threshold_pct = 100.0  # Percentage of particles that must be below threshold (100% = all)
+        
         # Adaptive inertia weight parameters
         self.initial_w = options.get('w', 0.9)
         self.final_w = 0.4
@@ -340,17 +348,18 @@ class GlobalBestPSO(SwarmOptimizer):
         # NOTE: Scouts are DISABLED by default for backward compatibility with PySwarms
         # Existing PySwarms code will work without any changes
         default_scout_config = {
-            'scouts_per_spawn': 100,
-            'scout_lifetime': 20,
+            'scouts_per_spawn': 10,
+            'scout_lifetime': 10,
+            'adaptive_negative_fitness_threshold_enabled': False,
             'negative_fitness_threshold': 1e3,
-            'spawn_lhs_percentage': 0.01,
-            'max_concurrent_groups': 999,
+            'spawn_lhs_percentage': 0.01,  # LHS hypercube size as % of parameter ranges
+            'max_concurrent_groups': 50,
             'enable_scouts': True,  # Disabled by default for backward compatibility
             # Local search parameters
             'local_search_neighbors': 10,  # Number of neighbors to generate per scout
-            'initial_search_radius_percentage': 0.05,  # 5% of parameter ranges
+            'initial_search_radius_percentage': 0.01,  # 1% of parameter ranges
             'radius_shrink_factor': 0.8,  # Shrink by 20% when no improvement
-            'min_search_radius_percentage': 0.001,  # 0.1% minimum radius
+            'min_search_radius_percentage': 0.00001,  # 0.001% minimum radius
         }
         
         # Merge user-provided config with defaults
@@ -421,12 +430,15 @@ class GlobalBestPSO(SwarmOptimizer):
         valid_params = {
             'scouts_per_spawn': (int, lambda x: x > 0, "must be a positive integer"),
             'scout_lifetime': (int, lambda x: x > 0, "must be a positive integer"),
-            'ocean_hit_threshold': ((int, float), lambda x: 0.0 <= x <= 1.0, "must be between 0.0 and 1.0"),
             'negative_fitness_threshold': ((int, float), lambda x: x > 0, "must be positive"),
-            'ocean_fitness_threshold': ((int, float), lambda x: x > 0, "must be positive"),
             'spawn_lhs_percentage': ((int, float), lambda x: 0.0 < x <= 1.0, "must be between 0.0 and 1.0"),
             'max_concurrent_groups': (int, lambda x: x > 0, "must be a positive integer"),
-            'enable_scouts': (bool, lambda x: True, "must be a boolean")
+            'enable_scouts': (bool, lambda x: True, "must be a boolean"),
+            'adaptive_negative_fitness_threshold_enabled': (bool, lambda x: True, "must be a boolean"),
+            'local_search_neighbors': (int, lambda x: x > 0, "must be a positive integer"),
+            'initial_search_radius_percentage': ((int, float), lambda x: 0.0 < x <= 1.0, "must be between 0.0 and 1.0"),
+            'radius_shrink_factor': ((int, float), lambda x: 0.0 < x < 1.0, "must be between 0.0 and 1.0"),
+            'min_search_radius_percentage': ((int, float), lambda x: 0.0 < x <= 1.0, "must be between 0.0 and 1.0"),
         }
         
         # Validate each parameter in the config
@@ -434,7 +446,7 @@ class GlobalBestPSO(SwarmOptimizer):
             if param_name not in valid_params:
                 # Follow PySwarms pattern: use ValueError for invalid parameter names
                 raise ValueError(
-                    f"Unknown hill scout parameter: '{param_name}'. "
+                    f"Unknown scout parameter: '{param_name}'. "
                     f"Valid parameters are: {list(valid_params.keys())}"
                 )
             
@@ -453,19 +465,6 @@ class GlobalBestPSO(SwarmOptimizer):
                 raise ValueError(
                     f"Parameter '{param_name}' {error_msg}, got {param_value}"
                 )
-        
-        # Additional cross-parameter validation
-        if 'ocean_hit_threshold' in config and config['ocean_hit_threshold'] == 0.0:
-            raise ValueError(
-                "ocean_hit_threshold cannot be 0.0 (would never trigger phase transition)"
-            )
-        
-        if ('negative_fitness_threshold' in config and 
-            'ocean_fitness_threshold' in config and 
-            config['negative_fitness_threshold'] >= config['ocean_fitness_threshold']):
-            raise ValueError(
-                "negative_fitness_threshold must be less than ocean_fitness_threshold"
-            )
 
     def get_optimizer_info(self):
         """Get information about the optimizer version and configuration
@@ -593,7 +592,7 @@ class GlobalBestPSO(SwarmOptimizer):
         self.parameter_names = parameter_names
         if parameter_names:
             self.detailed_history['parameter_names'] = parameter_names
-        self.log_message(f"📈 History data will be saved to: {history_data_path}", emoji="📈")
+        self.log_message(f"📈 History data will be saved to: {history_data_path}")
 
     def save_history_data(self, iteration):
         """Save detailed history data for analysis (append mode)"""
@@ -619,10 +618,10 @@ class GlobalBestPSO(SwarmOptimizer):
                     self._history_loaded = True
                     existing_count = len(existing_data.get('iteration', []))
                     if existing_count > 0:
-                        self.log_message(f"📚 Loaded {existing_count} existing history records", emoji="📚")
+                        self.log_message(f"📚 Loaded {existing_count} existing history records")
                         
                 except Exception as e:
-                    self.log_message(f"⚠️ Could not load existing history: {e}, starting fresh", emoji="⚠️")
+                    self.log_message(f"⚠️ Could not load existing history: {e}, starting fresh")
                     self._history_loaded = True  # Mark as attempted to avoid repeated tries
             
             # Store current iteration data (append to existing)
@@ -639,10 +638,10 @@ class GlobalBestPSO(SwarmOptimizer):
             # Log progress every 10 iterations to avoid spam
             if iteration % 10 == 0:
                 total_records = len(self.detailed_history['iteration'])
-                self.log_message(f"📊 History data saved (iteration {iteration}, total records: {total_records})", emoji="📊")
+                self.log_message(f"📊 History data saved (iteration {iteration}, total records: {total_records})")
                 
         except Exception as e:
-            self.log_message(f"⚠️ Failed to save history data: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Failed to save history data: {e}")
 
     def console_wrapper(self, msg):
         """Wrapper for Rich console output with file logging"""
@@ -720,11 +719,11 @@ class GlobalBestPSO(SwarmOptimizer):
             if self.scout_config['enable_scouts']:
                 n_groups = len(getattr(self, 'active_scout_groups', {}))
                 n_scouts = len(getattr(self, 'scout_particles', {}))
-                self.log_message(f"💾 PSO checkpoint saved at iteration {iteration} ({n_groups} HC groups, {n_scouts} scouts)", emoji="💾")
+                self.log_message(f"💾 PSO checkpoint saved at iteration {iteration} ({n_groups} HC groups, {n_scouts} scouts)")
             else:
-                self.log_message(f"💾 PSO checkpoint saved at iteration {iteration}", emoji="💾")
+                self.log_message(f"💾 PSO checkpoint saved at iteration {iteration}")
         except Exception as e:
-            self.log_message(f"⚠️ Failed to save checkpoint: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Failed to save checkpoint: {e}")
 
     def _serialize_scout_groups(self):
         """Serialize hill scout groups with explicit numpy array handling"""
@@ -746,13 +745,17 @@ class GlobalBestPSO(SwarmOptimizer):
         return serialized
 
     def _serialize_scout_particles(self):
-        """Serialize hill scout particles with explicit numpy array handling"""
+        """Serialize scout particles with explicit numpy array handling
+        
+        Saves all scout data including neighbors for exact checkpoint restoration.
+        """
         if not hasattr(self, 'scout_particles'):
             return {}
         
         serialized = {}
         for scout_id, scout in self.scout_particles.items():
             serialized_scout = scout.copy()
+            
             # Ensure numpy arrays are properly copied
             if 'position' in serialized_scout and isinstance(serialized_scout['position'], np.ndarray):
                 serialized_scout['position'] = serialized_scout['position'].copy()
@@ -762,6 +765,15 @@ class GlobalBestPSO(SwarmOptimizer):
                 serialized_scout['local_best'] = serialized_scout['local_best'].copy()
             if 'assigned_point' in serialized_scout and isinstance(serialized_scout['assigned_point'], np.ndarray):
                 serialized_scout['assigned_point'] = serialized_scout['assigned_point'].copy()
+            
+            # Handle neighbors array (2D numpy array)
+            if 'neighbors' in serialized_scout and isinstance(serialized_scout['neighbors'], np.ndarray):
+                serialized_scout['neighbors'] = serialized_scout['neighbors'].copy()
+            
+            # Handle neighbor_fitness array
+            if 'neighbor_fitness' in serialized_scout and isinstance(serialized_scout['neighbor_fitness'], np.ndarray):
+                serialized_scout['neighbor_fitness'] = serialized_scout['neighbor_fitness'].copy()
+            
             serialized[scout_id] = serialized_scout
         
         return serialized
@@ -790,7 +802,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 self.swarm.velocity = checkpoint_data["swarm_velocity"]
                 self.swarm.pbest_pos = checkpoint_data["swarm_pbest_pos"]
                 self.swarm.pbest_cost = checkpoint_data["swarm_pbest_cost"]
-                self.log_message(f"✅ Resumed with same swarm size ({current_n_particles} particles)", emoji="✅")
+                self.log_message(f"✅ Resumed with same swarm size ({current_n_particles} particles)")
                 
             elif checkpoint_n_particles > current_n_particles:
                 # Shrinking swarm - keep best particles
@@ -802,7 +814,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 self.swarm.pbest_pos = checkpoint_data["swarm_pbest_pos"][best_indices]
                 self.swarm.pbest_cost = checkpoint_data["swarm_pbest_cost"][best_indices]
                 
-                self.log_message(f"📉 Shrunk swarm from {checkpoint_n_particles} to {current_n_particles} particles (kept best performers)", emoji="📉")
+                self.log_message(f"📉 Shrunk swarm from {checkpoint_n_particles} to {current_n_particles} particles (kept best performers)")
                 
             else:
                 # Growing swarm - preserve existing + add new particles
@@ -854,7 +866,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 # Initialize pbest for new particles (will be set properly in first iteration)
                 self.swarm.pbest_pos[checkpoint_n_particles:] = self.swarm.position[checkpoint_n_particles:]
                 
-                self.log_message(f"📈 Expanded swarm from {checkpoint_n_particles} to {current_n_particles} particles (added {new_particles} new particles)", emoji="📈")
+                self.log_message(f"📈 Expanded swarm from {checkpoint_n_particles} to {current_n_particles} particles (added {new_particles} new particles)")
             
             # Restore other state variables
             self.cost_history = checkpoint_data.get("cost_history", [])
@@ -880,10 +892,10 @@ class GlobalBestPSO(SwarmOptimizer):
                         self.visited_cells.add(coords)
                 
                 visited_count = len(self.visited_cells)
-                self.log_message(f"🗺️ Converted old dense grid to sparse format: {visited_count:,} cells visited", emoji="🗺️")
+                self.log_message(f"🗺️ Converted old dense grid to sparse format: {visited_count:,} cells visited")
             else:
                 # Backwards compatibility - no exploration data in old checkpoints
-                self.log_message("🗺️ No exploration data in checkpoint - will initialize fresh sparse grid", emoji="🗺️")
+                self.log_message("🗺️ No exploration data in checkpoint - will initialize fresh sparse grid")
             
             # Restore competitive evolution data (backwards compatible)
             self.visited_cells = checkpoint_data.get("visited_cells", set())
@@ -910,10 +922,10 @@ class GlobalBestPSO(SwarmOptimizer):
                 self.cell_stagnation_tracking[grid_coords] = deque(tracking_list, maxlen=self.blacklist_window)
             
             if self.visited_cells:
-                self.log_message(f"⚔️ Restored competitive evolution: {len(self.visited_cells):,} visited cells", emoji="⚔️")
+                self.log_message(f"⚔️ Restored competitive evolution: {len(self.visited_cells):,} visited cells")
             
             if self.blacklisted_cells:
-                self.log_message(f"🚫 Restored blacklist: {len(self.blacklisted_cells):,} blacklisted cells", emoji="🚫")
+                self.log_message(f"🚫 Restored blacklist: {len(self.blacklisted_cells):,} blacklisted cells")
             
             # Restore hill scout data (backwards compatible)
             if self.scout_config['enable_scouts']:
@@ -924,7 +936,19 @@ class GlobalBestPSO(SwarmOptimizer):
                 self._next_group_id = checkpoint_data.get("_next_group_id", 0)
                 self._next_scout_id = checkpoint_data.get("_next_scout_id", 0)
                 
-                # Validate and clean up hill scout particles
+                # Clean up old phase-related fields from groups (backward compatibility)
+                for group_id, group in self.active_scout_groups.items():
+                    # Remove old phase system fields if they exist
+                    group.pop('phase', None)
+                    group.pop('ocean_hit_percentage', None)
+                    group.pop('best_M_points', None)
+                    group.pop('current_radius', None)
+                    group.pop('radius_increment', None)
+                    group.pop('samples_taken', None)
+                    group.pop('ocean_hits', None)
+                    group.pop('radial_sampling_iterations', None)
+                
+                # Validate and clean up scout particles
                 invalid_scouts = []
                 for scout_id, scout in self.scout_particles.items():
                     # Check if position exists and is valid
@@ -938,7 +962,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 # Remove invalid scouts
                 for scout_id in invalid_scouts:
                     del self.scout_particles[scout_id]
-                    self.log_message(f"⚠️ Removed invalid hill scout {scout_id} during checkpoint load", emoji="⚠️")
+                    self.log_message(f"⚠️ Removed invalid scout {scout_id} during checkpoint load")
                 
                 # Remove groups that have no valid scouts
                 invalid_groups = []
@@ -955,9 +979,9 @@ class GlobalBestPSO(SwarmOptimizer):
                 # Remove invalid groups
                 for group_id in invalid_groups:
                     del self.active_scout_groups[group_id]
-                    self.log_message(f"⚠️ Removed invalid hill scout group {group_id} (no valid scouts)", emoji="⚠️")
+                    self.log_message(f"⚠️ Removed invalid scout group {group_id} (no valid scouts)")
                 
-                # Log hill scout restoration
+                # Log scout restoration
                 n_groups = len(self.active_scout_groups)
                 n_scouts = len(self.scout_particles)
                 n_spawning_events = len(self.spawning_history)
@@ -965,39 +989,27 @@ class GlobalBestPSO(SwarmOptimizer):
                 
                 if n_groups > 0 or n_scouts > 0:
                     self.log_message(
-                        f"🏔️ Restored hill scouts: {n_groups} active groups, {n_scouts} scouts, "
-                        f"{n_spawning_events} spawning events, {n_attributions} attributions",
-                        emoji="🏔️"
+                        f"🏔️ Restored scouts: {n_groups} active groups, {n_scouts} scouts, "
+                        f"{n_spawning_events} spawning events, {n_attributions} attributions"
                     )
                     
                     if invalid_scouts or invalid_groups:
                         self.log_message(
-                            f"   🧹 Cleaned up: {len(invalid_scouts)} invalid scouts, {len(invalid_groups)} invalid groups",
-                            emoji="🧹"
-                        )
-                    
-                    # Log groups by phase
-                    radial_sampling_groups = sum(1 for g in self.active_scout_groups.values() if g['phase'] == 'radial_sampling')
-                    hill_climbing_groups = sum(1 for g in self.active_scout_groups.values() if g['phase'] == 'hill_climbing')
-                    
-                    if radial_sampling_groups > 0 or hill_climbing_groups > 0:
-                        self.log_message(
-                            f"   📊 Groups by phase: {radial_sampling_groups} radial sampling, {hill_climbing_groups} hill climbing",
-                            emoji="📊"
+                            f"   🧹 Cleaned up: {len(invalid_scouts)} invalid scouts, {len(invalid_groups)} invalid groups"
                         )
             
             start_iter = checkpoint_data["iteration"] + 1
-            self.log_message(f"✅ Resumed from iteration {checkpoint_data['iteration']}, best fitness: {self.swarm.best_cost:.6e}", emoji="✅")
+            self.log_message(f"✅ Resumed from iteration {checkpoint_data['iteration']}, best fitness: {self.swarm.best_cost:.6e}")
             return start_iter
             
         except Exception as e:
-            self.log_message(f"⚠️ Failed to load checkpoint: {e}, starting fresh", emoji="⚠️")
+            self.log_message(f"⚠️ Failed to load checkpoint: {e}, starting fresh")
             return None
 
     def _generate_latin_hypercube_positions(self, n_particles, bounds):
         """Generate initial positions using Latin Hypercube Sampling for better space coverage"""
         if not SCIPY_AVAILABLE:
-            self.log_message("⚠️ SciPy not available, falling back to uniform random initialization", emoji="⚠️")
+            self.log_message("⚠️ SciPy not available, falling back to uniform random initialization")
             return self._generate_uniform_positions(n_particles, bounds)
         
         try:
@@ -1011,17 +1023,17 @@ class GlobalBestPSO(SwarmOptimizer):
                 # Scale to [-center, center] if no bounds
                 positions = qmc.scale(sample, -self.center, self.center)
             
-            # self.log_message(f"🎯 Initialized {n_particles} particles using Latin Hypercube Sampling", emoji="🎯")
+            # self.log_message(f"🎯 Initialized {n_particles} particles using Latin Hypercube Sampling")
             return positions
             
         except Exception as e:
-            self.log_message(f"⚠️ LHS initialization failed: {e}, falling back to uniform", emoji="⚠️")
+            self.log_message(f"⚠️ LHS initialization failed: {e}, falling back to uniform")
             return self._generate_uniform_positions(n_particles, bounds)
 
     def _generate_sobol_positions(self, n_particles, bounds):
         """Generate initial positions using Sobol sequences for low-discrepancy coverage"""
         if not SCIPY_AVAILABLE:
-            self.log_message("⚠️ SciPy not available, falling back to uniform random initialization", emoji="⚠️")
+            self.log_message("⚠️ SciPy not available, falling back to uniform random initialization")
             return self._generate_uniform_positions(n_particles, bounds)
         
         try:
@@ -1039,11 +1051,11 @@ class GlobalBestPSO(SwarmOptimizer):
             else:
                 positions = qmc.scale(sample, -self.center, self.center)
             
-            self.log_message(f"🌐 Initialized {n_particles} particles using Sobol sequences", emoji="🌐")
+            self.log_message(f"🌐 Initialized {n_particles} particles using Sobol sequences")
             return positions
             
         except Exception as e:
-            self.log_message(f"⚠️ Sobol initialization failed: {e}, falling back to uniform", emoji="⚠️")
+            self.log_message(f"⚠️ Sobol initialization failed: {e}, falling back to uniform")
             return self._generate_uniform_positions(n_particles, bounds)
 
     def _generate_stratified_positions(self, n_particles, bounds):
@@ -1069,11 +1081,11 @@ class GlobalBestPSO(SwarmOptimizer):
             # Shuffle particles to avoid correlation between dimensions
             np.random.shuffle(positions)
             
-            self.log_message(f"📊 Initialized {n_particles} particles using stratified sampling", emoji="📊")
+            self.log_message(f"📊 Initialized {n_particles} particles using stratified sampling")
             return positions
             
         except Exception as e:
-            self.log_message(f"⚠️ Stratified initialization failed: {e}, falling back to uniform", emoji="⚠️")
+            self.log_message(f"⚠️ Stratified initialization failed: {e}, falling back to uniform")
             return self._generate_uniform_positions(n_particles, bounds)
 
     def _generate_opposition_based_positions(self, n_particles, bounds):
@@ -1103,11 +1115,11 @@ class GlobalBestPSO(SwarmOptimizer):
             # Shuffle to mix random and opposite particles
             np.random.shuffle(positions)
             
-            self.log_message(f"🔄 Initialized {n_particles} particles using Opposition-Based Learning", emoji="🔄")
+            self.log_message(f"🔄 Initialized {n_particles} particles using Opposition-Based Learning")
             return positions
             
         except Exception as e:
-            self.log_message(f"⚠️ Opposition-based initialization failed: {e}, falling back to uniform", emoji="⚠️")
+            self.log_message(f"⚠️ Opposition-based initialization failed: {e}, falling back to uniform")
             return self._generate_uniform_positions(n_particles, bounds)
 
     def _generate_hybrid_positions(self, n_particles, bounds):
@@ -1147,11 +1159,11 @@ class GlobalBestPSO(SwarmOptimizer):
             # Shuffle to mix different initialization strategies
             np.random.shuffle(positions)
             
-            self.log_message(f"🎭 Initialized {n_particles} particles using hybrid approach (LHS:{n_lhs}, Sobol:{n_sobol}, Stratified:{n_stratified}, Opposition:{n_opposition})", emoji="🎭")
+            self.log_message(f"🎭 Initialized {n_particles} particles using hybrid approach (LHS:{n_lhs}, Sobol:{n_sobol}, Stratified:{n_stratified}, Opposition:{n_opposition})")
             return positions
             
         except Exception as e:
-            self.log_message(f"⚠️ Hybrid initialization failed: {e}, falling back to uniform", emoji="⚠️")
+            self.log_message(f"⚠️ Hybrid initialization failed: {e}, falling back to uniform")
             return self._generate_uniform_positions(n_particles, bounds)
 
     def _generate_uniform_positions(self, n_particles, bounds):
@@ -1162,7 +1174,7 @@ class GlobalBestPSO(SwarmOptimizer):
             lower_bounds, upper_bounds = bounds
             positions = np.random.uniform(lower_bounds, upper_bounds, (n_particles, self.dimensions))
         
-        self.log_message(f"🎲 Initialized {n_particles} particles using uniform random sampling", emoji="🎲")
+        self.log_message(f"🎲 Initialized {n_particles} particles using uniform random sampling")
         return positions
 
     def _handle_history_on_reevaluation(self, old_global_best, new_global_best):
@@ -1184,7 +1196,7 @@ class GlobalBestPSO(SwarmOptimizer):
         
         if relative_change > significant_change_threshold:
             # Significant change detected - clear potentially outdated history
-            self.log_message(f"⚠️ Significant fitness change detected ({relative_change:.2%}), clearing potentially outdated history", emoji="⚠️")
+            self.log_message(f"⚠️ Significant fitness change detected ({relative_change:.2%}), clearing potentially outdated history")
             
             # Clear internal PSO history (cost_history, pos_history)
             self.cost_history = []
@@ -1205,18 +1217,18 @@ class GlobalBestPSO(SwarmOptimizer):
             if self.history_data_path and os.path.exists(self.history_data_path):
                 try:
                     os.remove(self.history_data_path)
-                    self.log_message(f"🗑️ Cleared history file: {self.history_data_path}", emoji="🗑️")
+                    self.log_message(f"🗑️ Cleared history file: {self.history_data_path}")
                 except Exception as e:
-                    self.log_message(f"⚠️ Failed to clear history file: {e}", emoji="⚠️")
+                    self.log_message(f"⚠️ Failed to clear history file: {e}")
             
             # Reset history loading flag
             if hasattr(self, '_history_loaded'):
                 delattr(self, '_history_loaded')
             
-            self.log_message("🔄 History cleared due to objective function changes - starting fresh tracking", emoji="🔄")
+            self.log_message("🔄 History cleared due to objective function changes - starting fresh tracking")
         else:
             # Minor change - keep history but add a note
-            self.log_message(f"✅ Minor fitness change ({relative_change:.2%}), keeping existing history", emoji="✅")
+            self.log_message(f"✅ Minor fitness change ({relative_change:.2%}), keeping existing history")
 
     def set_history_clear_threshold(self, threshold=0.01):
         """Set the threshold for clearing history when objective function changes
@@ -1229,7 +1241,7 @@ class GlobalBestPSO(SwarmOptimizer):
             when resuming from checkpoint, history will be cleared
         """
         self.significant_change_threshold = threshold
-        self.log_message(f"📊 Set history clear threshold to {threshold:.2%}", emoji="📊")
+        self.log_message(f"📊 Set history clear threshold to {threshold:.2%}")
 
     def set_grid_resolution(self, resolution=None):
         """Set the grid resolution for search space exploration tracking
@@ -1246,16 +1258,16 @@ class GlobalBestPSO(SwarmOptimizer):
             # Clear existing sparse grid to use new resolution
             self.visited_cells.clear()
             self._total_grid_cells = resolution ** self.dimensions
-            self.log_message(f"🔢 Set sparse grid resolution to {resolution}^{self.dimensions} = {resolution**self.dimensions:,} cells", emoji="🔢")
+            self.log_message(f"🔢 Set sparse grid resolution to {resolution}^{self.dimensions} = {resolution**self.dimensions:,} cells")
         else:
-            self.log_message("🔢 Using adaptive sparse grid resolution based on problem dimensions", emoji="🔢")
+            self.log_message("🔢 Using adaptive sparse grid resolution based on problem dimensions")
 
     def reset_exploration_tracking(self):
         """Reset the sparse exploration grid to start fresh tracking"""
         self.visited_cells.clear()
         if hasattr(self, '_discovered_coords'):
             self._discovered_coords.clear()
-        self.log_message("🔄 Reset sparse exploration tracking grid", emoji="🔄")
+        self.log_message("🔄 Reset sparse exploration tracking grid")
 
     def set_pca_visualization(self, enable=True, width=150, height=25, graphs_path="logs/graphs.log"):
         """Configure PCA visualization settings
@@ -1275,13 +1287,13 @@ class GlobalBestPSO(SwarmOptimizer):
         self.pca_grid_width = width
         self.pca_grid_height = height
         self.graphs_path = graphs_path
-        self.log_message(f"📊 PCA visualization: {'enabled' if enable else 'disabled'} (grid: {width}x{height})", emoji="📊")
+        self.log_message(f"📊 PCA visualization: {'enabled' if enable else 'disabled'} (grid: {width}x{height})")
 
     def _create_pca_visualization(self, iteration):
         """Create PCA-based ASCII visualization of particle distribution"""
         if not self.enable_pca_visualization or not RICH_AVAILABLE or not SKLEARN_AVAILABLE:
             if not SKLEARN_AVAILABLE and iteration == 0:  # Only warn once
-                self.log_message("⚠️ sklearn not available, PCA visualization disabled", emoji="⚠️")
+                self.log_message("⚠️ sklearn not available, PCA visualization disabled")
             return
         
         # Get current particle positions
@@ -1530,10 +1542,10 @@ class GlobalBestPSO(SwarmOptimizer):
                 old_deque = self.cell_fitness_history[grid_coords]
                 self.cell_fitness_history[grid_coords] = deque(old_deque, maxlen=stagnation_window)
         
-        self.log_message(f"⚔️ Competitive evolution: {'enabled' if enable else 'disabled'}", emoji="⚔️")
+        self.log_message(f"⚔️ Competitive evolution: {'enabled' if enable else 'disabled'}")
         if enable:
-            self.log_message(f"   📊 Max {max_particles_per_cell} particles/cell, {eviction_percentage}% eviction, {stagnation_window}-iter stagnation window", emoji="📊")
-            self.log_message(f"   🔄 Competition check every {check_interval} iterations", emoji="🔄")
+            self.log_message(f"📊 Max {max_particles_per_cell} particles/cell, {eviction_percentage}% eviction, {stagnation_window}-iter stagnation window")
+            self.log_message(f"🔄 Competition check every {check_interval} iterations")
 
     def set_blacklist_config(self, fitness_threshold=1e5, blacklist_window=100):
         """Configure cell blacklisting system settings
@@ -1559,7 +1571,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 old_deque = self.cell_stagnation_tracking[grid_coords]
                 self.cell_stagnation_tracking[grid_coords] = deque(old_deque, maxlen=blacklist_window)
         
-        self.log_message(f"🚫 Cell blacklisting: fitness threshold {fitness_threshold:.0e}, window {blacklist_window} iterations", emoji="🚫")
+        self.log_message(f"🚫 Cell blacklisting: fitness threshold {fitness_threshold:.0e}, window {blacklist_window} iterations")
 
     def set_velocity_boost_config(self, interval=10, fraction=0.20, enable=True, optimize_limits_len=5, use_exploration_prediction=True, n_alternative_swarms=200, prediction_steps=10, grid_refinement_threshold=95.0, max_grid_resolution=50):
         """Configure velocity boost settings with sophisticated particle selection
@@ -1596,11 +1608,78 @@ class GlobalBestPSO(SwarmOptimizer):
         self.max_grid_resolution = max_grid_resolution
         
         fitness_threshold = 10 ** optimize_limits_len
-        self.log_message(f"🚀 Smart velocity boost: {'enabled' if enable else 'disabled'} (every {interval} iters)", emoji="🚀")
-        self.log_message(f"   📊 Selection: 20%-90% particles, fitness threshold: {fitness_threshold:.0e}", emoji="📊")
+        self.log_message(f"🚀 Smart velocity boost: {'enabled' if enable else 'disabled'} (every {interval} iters)")
+        self.log_message(f"📊 Selection: 20%-90% particles, fitness threshold: {fitness_threshold:.0e}")
         if use_exploration_prediction:
-            self.log_message(f"   🎯 Multi-step exploration prediction: enabled ({n_alternative_swarms} alternatives × {prediction_steps} steps)", emoji="🎯")
-            self.log_message(f"   🔍 Grid refinement: enabled at {grid_refinement_threshold}% saturation (max resolution: {max_grid_resolution})", emoji="🔍")
+            self.log_message(f"🎯 Multi-step exploration prediction: enabled ({n_alternative_swarms} alternatives × {prediction_steps} steps)")
+            self.log_message(f"🔍 Grid refinement: enabled at {grid_refinement_threshold}% saturation (max resolution: {max_grid_resolution})")
+
+    def set_10n_selection_config(self, enable=True, multiplier=10, interval=10, on_fresh_start=True, on_checkpoint_resume=True, quality_threshold_pct=100.0):
+        """Configure adaptive quality selection for continuous quality injection
+        
+        This method configures the adaptive quality selection strategy, which samples
+        batches of multiplier*n candidates until it finds enough particles with fitness below
+        the negative_fitness_threshold (from scout_config). Each batch uses fresh LHS sampling.
+        
+        The strategy keeps sampling until:
+        - quality_threshold_pct% of n particles are found (fitness < threshold), OR
+        - max_batches (100) is reached (fallback to best n from all evaluated)
+        
+        Parameters
+        ----------
+        enable : bool
+            Enable/disable adaptive quality selection (default: True)
+        multiplier : int
+            Batch size multiplier (default: 10 for 10n candidates per batch)
+        interval : int
+            Run selection every X iterations (default: 10)
+        on_fresh_start : bool
+            Run selection on fresh start at iteration 0 (default: True)
+        on_checkpoint_resume : bool
+            Run selection when resuming from checkpoint (default: True)
+        quality_threshold_pct : float
+            Percentage of particles that must be below threshold (default: 100.0 = all particles)
+            Examples: 80.0 = stop when 80% are below threshold, 50.0 = stop when 50% are below
+            
+        Notes
+        -----
+        The fitness threshold is taken from scout_config['negative_fitness_threshold'].
+        Each batch is sampled independently using LHS for good space coverage.
+        
+        Setting quality_threshold_pct < 100.0 allows the optimizer to stop earlier on hard
+        landscapes where finding all n quality particles would take too many batches.
+        
+        Examples
+        --------
+        >>> # Require all particles below threshold (strict)
+        >>> optimizer.set_10n_selection_config(
+        ...     enable=True,
+        ...     multiplier=10,
+        ...     quality_threshold_pct=100.0
+        ... )
+        
+        >>> # Allow stopping when 80% are below threshold (more flexible)
+        >>> optimizer.set_10n_selection_config(
+        ...     enable=True,
+        ...     multiplier=10,
+        ...     quality_threshold_pct=80.0
+        ... )
+        """
+        self.enable_10n_selection = enable
+        self.selection_multiplier = multiplier
+        self.selection_interval = interval
+        self.selection_on_fresh_start = on_fresh_start
+        self.selection_on_checkpoint_resume = on_checkpoint_resume
+        self.selection_quality_threshold_pct = quality_threshold_pct
+        
+        self.log_message(f"🎯 Adaptive quality selection: {'enabled' if enable else 'disabled'}")
+        if enable:
+            threshold = self.scout_config['negative_fitness_threshold']
+            target_n = int(self.n_particles * quality_threshold_pct / 100.0)
+            self.log_message(f"📊 {multiplier}n candidates per batch, target: {target_n}/{self.n_particles} particles < {threshold:.0e} ({quality_threshold_pct:.0f}%)")
+            self.log_message(f"🔁 Runs every {interval} iterations")
+            self.log_message(f"🚀 Fresh start: {'enabled' if on_fresh_start else 'disabled'}")
+            self.log_message(f"🔄 Checkpoint resume: {'enabled' if on_checkpoint_resume else 'disabled'}")
 
     def set_initialization_strategy(self, strategy="hybrid"):
         """Set the initialization strategy for particle positions
@@ -1621,7 +1700,7 @@ class GlobalBestPSO(SwarmOptimizer):
             raise ValueError(f"Invalid strategy '{strategy}'. Must be one of {valid_strategies}")
         
         self.initialization_strategy = strategy
-        self.log_message(f"🎯 Set initialization strategy to: {strategy}", emoji="🎯")
+        self.log_message(f"🎯 Set initialization strategy to: {strategy}")
 
     def _calculate_search_space_exploration(self):
         """Calculate the percentage of search space explored using sparse grid coverage
@@ -1654,7 +1733,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 self.grid_resolution = 3   # 3^n cells (manageable for high dimensions)
             
             self._total_grid_cells = self.grid_resolution ** self.dimensions
-            self.log_message(f"🔢 Sparse grid-based exploration tracking: {self.grid_resolution}^{self.dimensions} = {self._total_grid_cells:,} cells", emoji="🔢")
+            self.log_message(f"🔢 Sparse grid-based exploration tracking: {self.grid_resolution}^{self.dimensions} = {self._total_grid_cells:,} cells")
         
         # Update visited cells with current positions
         self._update_visited_cells_sparse()
@@ -1759,7 +1838,7 @@ class GlobalBestPSO(SwarmOptimizer):
         n_boost = len(boost_indices)
         
         if n_boost == 0:
-            self.log_message("⚠️ No particles selected for velocity boost", emoji="⚠️")
+            self.log_message("⚠️ No particles selected for velocity boost")
             return
         
         # Use global best position to bias direction away from current best solution
@@ -1767,7 +1846,7 @@ class GlobalBestPSO(SwarmOptimizer):
         
         # Ensure we have bounds for safe distance calculation
         if self.bounds is None:
-            self.log_message("⚠️ No bounds specified, cannot perform safe velocity boost", emoji="⚠️")
+            self.log_message("⚠️ No bounds specified, cannot perform safe velocity boost")
             return
             
         lower_bounds, upper_bounds = self.bounds
@@ -1853,10 +1932,10 @@ class GlobalBestPSO(SwarmOptimizer):
         boost_percentage = (n_boost / self.n_particles) * 100
         
         global_best_particle_idx = self._get_global_best_particle_idx()
-        self.log_message(f"🚀 Smart velocity boost applied to {n_boost}/{self.n_particles} particles ({boost_percentage:.1f}%) (global best particle #{global_best_particle_idx} protected)", emoji="🚀")
-        self.log_message(f"   📊 Selection: High pbest (≥{fitness_threshold:.0e}): {high_fitness_count}, Low pbest: {low_fitness_count}", emoji="📊")
-        self.log_message(f"   📈 Boosted particles pbest - Min: {before_boost_stats['min']:.6e}, Avg: {before_boost_stats['mean']:.6e}, Max: {before_boost_stats['max']:.6e}", emoji="📈")
-        self.log_message(f"   🔄 Reset pbest for all boosted particles - fresh start opportunity", emoji="🔄")
+        self.log_message(f"🚀 Smart velocity boost applied to {n_boost}/{self.n_particles} particles ({boost_percentage:.1f}%) (global best particle #{global_best_particle_idx} protected)")
+        self.log_message(f"📊 Selection: High pbest (≥{fitness_threshold:.0e}): {high_fitness_count}, Low pbest: {low_fitness_count}")
+        self.log_message(f"📈 Boosted particles pbest - Min: {before_boost_stats['min']:.6e}, Avg: {before_boost_stats['mean']:.6e}, Max: {before_boost_stats['max']:.6e}")
+        self.log_message(f"🔄 Reset pbest for all boosted particles - fresh start opportunity")
         
         # Show "after boost" statistics if we have data from previous boost
         if hasattr(self, 'last_boosted_indices') and hasattr(self, 'last_boost_iteration') and self.last_boost_iteration == iteration - self.reinit_interval:
@@ -1867,9 +1946,9 @@ class GlobalBestPSO(SwarmOptimizer):
                 'max': np.max(prev_boosted_current_fitness),
                 'mean': np.mean(prev_boosted_current_fitness)
             }
-            self.log_message(f"   📉 Previous boosted particles fitness - Min: {after_boost_stats['min']:.6e}, Avg: {after_boost_stats['mean']:.6e}, Max: {after_boost_stats['max']:.6e}", emoji="📉")
+            self.log_message(f"📉 Previous boosted particles fitness - Min: {after_boost_stats['min']:.6e}, Avg: {after_boost_stats['mean']:.6e}, Max: {after_boost_stats['max']:.6e}")
         
-        self.log_message(f"   ⚡ Avg velocity magnitude: {avg_magnitude:.6f}", emoji="⚡")
+        self.log_message(f"⚡ Avg velocity magnitude: {avg_magnitude:.6f}")
 
     def _initialize_positions_with_strategy(self, n_particles, bounds):
         """Initialize particle positions using the selected strategy"""
@@ -1896,14 +1975,14 @@ class GlobalBestPSO(SwarmOptimizer):
         # Validate init_pos dimensions
         init_pos = np.array(self.custom_init_pos)
         if init_pos.shape != (self.dimensions,):
-            self.log_message(f"⚠️ init_pos shape {init_pos.shape} doesn't match dimensions {self.dimensions}, skipping injection", emoji="⚠️")
+            self.log_message(f"⚠️ init_pos shape {init_pos.shape} doesn't match dimensions {self.dimensions}, skipping injection")
             return
         
         # Validate bounds if they exist
         if self.bounds is not None:
             lower_bounds, upper_bounds = self.bounds
             if not np.all((init_pos >= lower_bounds) & (init_pos <= upper_bounds)):
-                self.log_message("⚠️ init_pos is outside bounds, clipping to bounds", emoji="⚠️")
+                self.log_message("⚠️ init_pos is outside bounds, clipping to bounds")
                 init_pos = np.clip(init_pos, lower_bounds, upper_bounds)
         
         # Replace the first particle with init_pos
@@ -1924,7 +2003,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 self.swarm.velocity[0] = 0
                 # self.swarm.velocity[0] = np.random.uniform(-0.1, 0.1, self.dimensions)
         
-        self.log_message(f"🎯 Injected init_pos particle at position 0 (fresh start)", emoji="🎯")
+        self.log_message(f"🎯 Injected init_pos particle at position 0 (fresh start)")
 
     def _inject_init_pos_checkpoint_resume(self, objective_func, **kwargs):
         """Inject init_pos particle during checkpoint resume by replacing worst particle"""
@@ -1934,14 +2013,14 @@ class GlobalBestPSO(SwarmOptimizer):
         # Validate init_pos dimensions
         init_pos = np.array(self.custom_init_pos)
         if init_pos.shape != (self.dimensions,):
-            self.log_message(f"⚠️ init_pos shape {init_pos.shape} doesn't match dimensions {self.dimensions}, skipping injection", emoji="⚠️")
+            self.log_message(f"⚠️ init_pos shape {init_pos.shape} doesn't match dimensions {self.dimensions}, skipping injection")
             return
         
         # Validate bounds if they exist
         if self.bounds is not None:
             lower_bounds, upper_bounds = self.bounds
             if not np.all((init_pos >= lower_bounds) & (init_pos <= upper_bounds)):
-                self.log_message("⚠️ init_pos is outside bounds, clipping to bounds", emoji="⚠️")
+                self.log_message("⚠️ init_pos is outside bounds, clipping to bounds")
                 init_pos = np.clip(init_pos, lower_bounds, upper_bounds)
         
         # Find the worst performing particle (highest pbest_cost)
@@ -1981,9 +2060,26 @@ class GlobalBestPSO(SwarmOptimizer):
         # Log the injection
         if self.swarm.best_cost < old_global_best:
             improvement = old_global_best - self.swarm.best_cost
-            self.log_message(f"🌟 init_pos particle replaced worst (fitness: {worst_fitness:.6e}) and became NEW GLOBAL BEST! (fitness: {temp_fitness[0]:.6e}, improvement: {improvement:.6e})", emoji="🌟")
+            self.log_message(f"🌟 init_pos particle replaced worst (fitness: {worst_fitness:.6e}) and became NEW GLOBAL BEST! (fitness: {temp_fitness[0]:.6e}, improvement: {improvement:.6e})")
+            
+            # Handle scout group spawning if scouts are enabled
+            if self.scout_config['enable_scouts']:
+                # Spawn a new scout group at the init_pos location
+                # It will automatically be immortal since its spawn_point matches the global best
+                new_group_id = self._spawn_scout_group(
+                    spawner_particle_id=worst_particle_idx,
+                    spawn_point=init_pos.copy(),
+                    trigger_fitness=temp_fitness[0],
+                    iteration=0  # This happens during initialization
+                )
+                
+                if new_group_id is not None:
+                    self.log_message(
+                        f"♾️ Global best group {new_group_id} spawned from init_pos (immortal)",
+                        emoji="♾️"
+                    )
         else:
-            self.log_message(f"🎯 init_pos particle replaced worst (fitness: {worst_fitness:.6e} → {temp_fitness[0]:.6e}) at position {worst_particle_idx}", emoji="🎯")
+            self.log_message(f"🎯 init_pos particle replaced worst (fitness: {worst_fitness:.6e} → {temp_fitness[0]:.6e}) at position {worst_particle_idx}")
 
     def optimize(
         self, objective_func, iters, n_processes=None, verbose=True, **kwargs
@@ -2064,7 +2160,7 @@ class GlobalBestPSO(SwarmOptimizer):
         start_iter = self.load_checkpoint()
         if start_iter is None:
             start_iter = 0
-            self.log_message("🚀 Starting fresh PSO optimization", emoji="🚀")
+            self.log_message("🚀 Starting fresh PSO optimization")
         
         # Apply verbosity
         if verbose:
@@ -2078,8 +2174,8 @@ class GlobalBestPSO(SwarmOptimizer):
             lvl=log_level,
         )
         
-        self.log_message(f"🐝 Starting PSO evolution from iteration {start_iter}", emoji="🐝")
-        self.log_message(f"📊 Swarm size: {self.n_particles}", emoji="📊")
+        self.log_message(f"🐝 Starting PSO evolution from iteration {start_iter}")
+        self.log_message(f"📊 Swarm size: {self.n_particles}")
         
         # Populate memory of the handlers
         self.bh.memory = self.swarm.position
@@ -2090,41 +2186,41 @@ class GlobalBestPSO(SwarmOptimizer):
 
         # Initialize if starting fresh
         if start_iter == 0:
-            # Use advanced initialization strategy for better space coverage
-            self.swarm.position = self._initialize_positions_with_strategy(self.n_particles, self.bounds)
-            
-            # Initialize velocities based on position bounds
-            if self.velocity_clamp is not None:
-                min_vel, max_vel = self.velocity_clamp
-                self.swarm.velocity = np.random.uniform(min_vel, max_vel, (self.n_particles, self.dimensions))
+            # Run 10n selection if enabled for fresh start
+            if self.enable_10n_selection and self.selection_on_fresh_start:
+                self._run_10n_selection(iteration=0, objective_func=objective_func, is_fresh_start=True, **kwargs)
             else:
-                # Default velocity initialization based on position range
-                if self.bounds is not None:
-                    lower_bounds, upper_bounds = self.bounds
-                    vel_range = 0.1 * (upper_bounds - lower_bounds)  # 10% of parameter range
-                    self.swarm.velocity = np.random.uniform(-vel_range, vel_range, (self.n_particles, self.dimensions))
-                else:
-                    # Fallback velocity initialization
-                    self.swarm.velocity = np.random.uniform(-0.1, 0.1, (self.n_particles, self.dimensions))
-            
-            # Handle init_pos injection for fresh start
-            if self.custom_init_pos is not None:
-                self._inject_init_pos_fresh_start()
-            
-            # Initialize pbest arrays before evaluation
-            self.swarm.pbest_pos = self.swarm.position.copy()
-            self.swarm.pbest_cost = np.full(self.n_particles, np.inf)
-            
-            # Evaluate all particles to get proper fitness values (not np.inf)
-            self.swarm.current_cost = compute_objective_function(self.swarm, objective_func, pool=None, **kwargs)
-            self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
-            self.swarm.best_pos, self.swarm.best_cost = self.top.compute_gbest(self.swarm)
+                # Standard initialization
+                self._standard_initialization(objective_func, **kwargs)
             
             self.best_fitness_history = []
             self.stagnation_count = 0
             self.last_improvement_iter = 0
             
-            self.log_message(f"🎯 Initial evaluation complete - Global best: {self.swarm.best_cost:.6e}", emoji="🎯")
+            self.log_message(f"🎯 Initial evaluation complete - Global best: {self.swarm.best_cost:.6e}")
+            
+            # If init_pos was injected and became the global best, spawn a scout group for it
+            if self.custom_init_pos is not None and self.scout_config['enable_scouts']:
+                # Check if particle 0 (init_pos) is the global best
+                best_particle_idx = np.argmin(self.swarm.pbest_cost)
+                if best_particle_idx == 0:
+                    # Spawn a scout group at the init_pos location
+                    # It will automatically be immortal since its spawn_point matches the global best
+                    new_group_id = self._spawn_scout_group(
+                        spawner_particle_id=0,
+                        spawn_point=self.swarm.position[0].copy(),
+                        trigger_fitness=self.swarm.pbest_cost[0],
+                        iteration=0
+                    )
+                    
+                    if new_group_id is not None:
+                        self.log_message(
+                            f"♾️ Global best group {new_group_id} spawned from init_pos (immortal)"
+                        )
+        else:
+            # Checkpoint resume - run 10n selection if enabled
+            if self.enable_10n_selection and self.selection_on_checkpoint_resume:
+                self._run_10n_selection(iteration=start_iter, objective_func=objective_func, is_checkpoint_resume=True, **kwargs)
         
         # Initialize sparse exploration grid if not already done (for both fresh start and checkpoint resume)
         if not hasattr(self, 'grid_resolution') and self.bounds is not None:
@@ -2148,13 +2244,20 @@ class GlobalBestPSO(SwarmOptimizer):
             # Velocity boost for worst particles to escape stagnation
             self._boost_worst_particles_velocity(i)
             
+            # Run 10n selection every N iterations (if enabled)
+            if self.enable_10n_selection and i > 0 and i % self.selection_interval == 0:
+                self._run_10n_selection(iteration=i, objective_func=objective_func, is_periodic=True, **kwargs)
+            
             # Store previous personal best costs for improvement tracking and blacklist evaluation
             previous_pbest_cost = self.swarm.pbest_cost.copy()
             self._previous_pbest_costs = previous_pbest_cost  # Store for blacklist tracking
             
-            # Create evaluation batch combining PSO and hill scout positions
+            # Create evaluation batch combining PSO and scout positions
             if self.scout_config['enable_scouts'] and len(self.scout_particles) > 0:
                 try:
+                    # Generate LHS neighbors for all scouts before evaluation
+                    self._generate_scout_neighbors()
+                    
                     # Use batch evaluation system for parallel operation
                     batch_positions, attribution_map = self._create_evaluation_batch()
                     
@@ -2165,7 +2268,7 @@ class GlobalBestPSO(SwarmOptimizer):
                     # Evaluate all positions in a single batch
                     batch_fitness = compute_objective_function(temp_swarm, objective_func, pool=None, **kwargs)
                     
-                    # Distribute results back to PSO particles and hill scouts
+                    # Distribute results back to PSO particles, scouts, and neighbors
                     self._distribute_evaluation_results(batch_fitness, attribution_map)
                     
                     # Update PSO personal bests
@@ -2174,17 +2277,18 @@ class GlobalBestPSO(SwarmOptimizer):
                     # Log batch evaluation statistics
                     n_pso = self.n_particles
                     n_scouts = len(self.scout_particles)
+                    n_neighbors = len(batch_positions) - n_pso - n_scouts
                     self.log_message(
-                        f"📦 Batch evaluation: {n_pso} PSO particles + {n_scouts} hill scouts = {len(batch_positions)} total",
+                        f"📦 Batch evaluation: {n_pso} PSO + {n_scouts} scouts + {n_neighbors} neighbors = {len(batch_positions)} total",
                         emoji="📦"
                     )
                 except Exception as e:
                     # Fallback to standard PSO evaluation if batch evaluation fails
-                    self.log_message(f"⚠️ Batch evaluation failed: {e}, falling back to standard PSO evaluation", emoji="⚠️")
+                    self.log_message(f"⚠️ Batch evaluation failed: {e}, falling back to standard PSO evaluation")
                     self.swarm.current_cost = compute_objective_function(self.swarm, objective_func, pool=None, **kwargs)
                     self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
             else:
-                # Standard PSO evaluation (no hill scouts active)
+                # Standard PSO evaluation (no scouts active)
                 self.swarm.current_cost = compute_objective_function(self.swarm, objective_func, pool=None, **kwargs)
                 self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
             
@@ -2199,37 +2303,37 @@ class GlobalBestPSO(SwarmOptimizer):
                 try:
                     self._detect_and_spawn_scouts(i, objective_func, **kwargs)
                 except Exception as e:
-                    self.log_message(f"⚠️ Error in hill scout spawning detection: {e}", emoji="⚠️")
+                    self.log_message(f"⚠️ Error in hill scout spawning detection: {e}")
                 
                 try:
                     # Process hill scout groups (perform sampling/climbing)
                     self._process_scout_groups(i, objective_func, **kwargs)
                 except Exception as e:
-                    self.log_message(f"⚠️ Error processing hill scout groups: {e}", emoji="⚠️")
+                    self.log_message(f"⚠️ Error processing hill scout groups: {e}")
                 
                 try:
                     # Update hill scout phases and manage lifecycle
                     self._update_scout_phases(i)
                 except Exception as e:
-                    self.log_message(f"⚠️ Error updating hill scout phases: {e}", emoji="⚠️")
+                    self.log_message(f"⚠️ Error updating hill scout phases: {e}")
                 
                 try:
                     # Update hill scout lifetimes (decrement iteration counters)
                     self._update_scout_lifetimes()
                 except Exception as e:
-                    self.log_message(f"⚠️ Error updating hill scout lifetimes: {e}", emoji="⚠️")
+                    self.log_message(f"⚠️ Error updating hill scout lifetimes: {e}")
                 
                 try:
                     # Terminate expired hill scout groups
                     self._terminate_expired_groups(i)
                 except Exception as e:
-                    self.log_message(f"⚠️ Error terminating expired groups: {e}", emoji="⚠️")
+                    self.log_message(f"⚠️ Error terminating expired groups: {e}")
                 
                 try:
                     # Advance hill scout positions for next iteration
                     self._advance_scout_positions()
                 except Exception as e:
-                    self.log_message(f"⚠️ Error advancing hill scout positions: {e}", emoji="⚠️")
+                    self.log_message(f"⚠️ Error advancing hill scout positions: {e}")
             
             # Calculate how many particles improved their personal best
             pbest_improvements = self.swarm.pbest_cost < previous_pbest_cost
@@ -2246,7 +2350,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 self.last_improvement_iter = i
                 previous_best_fitness = self.swarm.best_cost
                 if verbose and RICH_AVAILABLE:
-                    self.log_message(f"🎉 NEW GLOBAL BEST! 🎉 Fitness: {self.swarm.best_cost:.6e} (improved by {improvement:.6e})", emoji="🌟")
+                    self.log_message(f"🎉 NEW GLOBAL BEST! 🎉 Fitness: {self.swarm.best_cost:.6e} (improved by {improvement:.6e})")
                 
                 # Log the best particle's optimization status
                 self._log_best_particle_status(i, objective_func, **kwargs)
@@ -2281,7 +2385,7 @@ class GlobalBestPSO(SwarmOptimizer):
             #     ftol_history.append(delta)
             #     if all(ftol_history):
             #         if verbose:
-            #             self.log_message(f"🎯 Convergence achieved at iteration {i}", emoji="🎯")
+            #             self.log_message(f"🎯 Convergence achieved at iteration {i}")
             #         break
             
             # Perform options update with adaptive inertia weight
@@ -2330,7 +2434,7 @@ class GlobalBestPSO(SwarmOptimizer):
                     self.low_velocity_count = 0  # Reset counter
                     
                     if verbose and RICH_AVAILABLE:
-                        self.log_message(f"🔄 Velocity restart triggered! Restarted {n_restart} particles (avg_vel: {avg_velocity:.6e})", emoji="🚀")
+                        self.log_message(f"🔄 Velocity restart triggered! Restarted {n_restart} particles (avg_vel: {avg_velocity:.6e})")
             else:
                 self.low_velocity_count = 0  # Reset counter if velocity is healthy
             
@@ -2394,17 +2498,13 @@ class GlobalBestPSO(SwarmOptimizer):
                 else:
                     competition_info = "⚔️ Competition: disabled"
                 
-                # Get hill scout statistics
+                # Get scout statistics
                 if self.scout_config['enable_scouts']:
                     n_hc_groups = len(self.active_scout_groups)
                     n_hc_scouts = len(self.scout_particles)
                     max_groups = self.scout_config['max_concurrent_groups']
                     
-                    # Count groups by phase
-                    radial_sampling_groups = sum(1 for g in self.active_scout_groups.values() if g['phase'] == 'radial_sampling')
-                    hill_climbing_groups = sum(1 for g in self.active_scout_groups.values() if g['phase'] == 'hill_climbing')
-                    
-                    scout_info = f"🏔️ Scouts: {n_hc_groups}/{max_groups} groups ({radial_sampling_groups} sampling, {hill_climbing_groups} climbing), {n_hc_scouts} total scouts"
+                    scout_info = f"🏔️ Scouts: {n_hc_groups}/{max_groups} groups, {n_hc_scouts} total scouts"
                 else:
                     scout_info = "🏔️ Scouts: disabled"
                 
@@ -2455,8 +2555,8 @@ class GlobalBestPSO(SwarmOptimizer):
         # Final statistics
         total_time = time.time() - self.start_time
         if verbose:
-            self.log_message(f"🕒 Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)", emoji="🕒")
-            self.log_message(f"🏆 Final best fitness: {final_best_cost:.6e}", emoji="🏆")
+            self.log_message(f"🕒 Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
+            self.log_message(f"🏆 Final best fitness: {final_best_cost:.6e}")
             
             # Log hill scout summary statistics if enabled
             if self.scout_config['enable_scouts']:
@@ -2523,17 +2623,17 @@ class GlobalBestPSO(SwarmOptimizer):
                         # Evaluate with verbose output (this will show the optimization status table)
                         evaluator.evaluate(individual)
                     
-                    self.log_message(f"🌟 Best particle status logged to {self.best_log_path} (iteration {iteration})", emoji="🌟")
+                    self.log_message(f"🌟 Best particle status logged to {self.best_log_path} (iteration {iteration})")
                 else:
-                    self.log_message("⚠️ PSO global variables not found, cannot log best particle status", emoji="⚠️")
+                    self.log_message("⚠️ PSO global variables not found, cannot log best particle status")
                     
             except ImportError as e:
-                self.log_message(f"⚠️ Could not import alternatives module: {e}", emoji="⚠️")
+                self.log_message(f"⚠️ Could not import alternatives module: {e}")
             except Exception as e:
-                self.log_message(f"⚠️ Error accessing PSO globals: {e}", emoji="⚠️")
+                self.log_message(f"⚠️ Error accessing PSO globals: {e}")
                 
         except Exception as e:
-            self.log_message(f"⚠️ Failed to log best particle status: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Failed to log best particle status: {e}")
 
     def _adaptive_boost_strategy(self, iteration):
         """Adaptive boost strategy based on exploration saturation"""
@@ -2547,12 +2647,12 @@ class GlobalBestPSO(SwarmOptimizer):
         # Determine strategy based on saturation level
         if exploration_saturation >= refinement_threshold:
             # High saturation - refine grid and continue exploration
-            self.log_message(f"🎯 Exploration saturation: {exploration_saturation:.1f}% (≥{refinement_threshold}%), refining grid resolution", emoji="🎯")
+            self.log_message(f"🎯 Exploration saturation: {exploration_saturation:.1f}% (≥{refinement_threshold}%), refining grid resolution")
             self._refine_exploration_grid()
             self._boost_particles_with_exploration_prediction(iteration)
         else:
             # Normal saturation - use exploration prediction
-            self.log_message(f"🎯 Exploration saturation: {exploration_saturation:.1f}%, using exploration prediction", emoji="🎯")
+            self.log_message(f"🎯 Exploration saturation: {exploration_saturation:.1f}%, using exploration prediction")
             self._boost_particles_with_exploration_prediction(iteration)
 
     def _calculate_exploration_saturation(self):
@@ -2571,7 +2671,7 @@ class GlobalBestPSO(SwarmOptimizer):
         """Double the grid resolution to create new unexplored regions for finer exploration using sparse storage"""
         
         if not hasattr(self, 'grid_resolution'):
-            self.log_message("⚠️ No exploration grid to refine", emoji="⚠️")
+            self.log_message("⚠️ No exploration grid to refine")
             return
         
         old_resolution = self.grid_resolution
@@ -2580,11 +2680,11 @@ class GlobalBestPSO(SwarmOptimizer):
         # Prevent excessive memory usage - limit maximum resolution
         max_resolution = getattr(self, 'max_grid_resolution', 50)
         if new_resolution > max_resolution:
-            self.log_message(f"⚠️ Grid resolution limit reached ({max_resolution}), cannot refine further", emoji="⚠️")
+            self.log_message(f"⚠️ Grid resolution limit reached ({max_resolution}), cannot refine further")
             return
         
         try:
-            self.log_message(f"🔍 Refining sparse exploration grid: {old_resolution}^{self.dimensions} → {new_resolution}^{self.dimensions}", emoji="🔍")
+            self.log_message(f"🔍 Refining sparse exploration grid: {old_resolution}^{self.dimensions} → {new_resolution}^{self.dimensions}")
             
             # Create new visited cells set for higher resolution
             new_visited_cells = set()
@@ -2610,11 +2710,11 @@ class GlobalBestPSO(SwarmOptimizer):
             new_saturation = (visited_count / self._total_grid_cells) * 100.0
             unexplored_cells = self._total_grid_cells - visited_count
             
-            self.log_message(f"   📊 New sparse grid: {self._total_grid_cells:,} total cells, {visited_count:,} visited ({new_saturation:.1f}%)", emoji="📊")
-            self.log_message(f"   🗺️ Created {unexplored_cells:,} new unexplored cells for finer exploration", emoji="🗺️")
+            self.log_message(f"📊 New sparse grid: {self._total_grid_cells:,} total cells, {visited_count:,} visited ({new_saturation:.1f}%)")
+            self.log_message(f"🗺️ Created {unexplored_cells:,} new unexplored cells for finer exploration")
             
         except Exception as e:
-            self.log_message(f"⚠️ Error refining sparse exploration grid: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error refining sparse exploration grid: {e}")
 
     def _boost_particles_with_exploration_prediction(self, iteration):
         """Boost particles using distance-maximization placement"""
@@ -2623,7 +2723,7 @@ class GlobalBestPSO(SwarmOptimizer):
         boost_indices = self._select_particles_for_boost()
         
         if len(boost_indices) == 0:
-            self.log_message("⚠️ No particles selected for distance-maximization boost", emoji="⚠️")
+            self.log_message("⚠️ No particles selected for distance-maximization boost")
             return
         
         # Calculate statistics for particles to be boosted (before boosting)
@@ -2665,11 +2765,11 @@ class GlobalBestPSO(SwarmOptimizer):
             
             # Log detailed boost information
             global_best_particle_idx = self._get_global_best_particle_idx()
-            self.log_message(f"   🚀 Farthest-point boost applied to {n_boost}/{self.n_particles} particles ({boost_percentage:.1f}%) (global best particle #{global_best_particle_idx} protected)", emoji="🚀")
-            self.log_message(f"   📊 Selection: High pbest (≥{fitness_threshold:.0e}): {high_fitness_count}, Low pbest: {low_fitness_count}", emoji="📊")
-            self.log_message(f"   📈 Boosted particles pbest - Min: {before_boost_stats['min']:.6e}, Avg: {before_boost_stats['mean']:.6e}, Max: {before_boost_stats['max']:.6e}", emoji="📈")
-            self.log_message(f"   🔄 Reset pbest for all boosted particles - fresh start opportunity", emoji="🔄")
-            self.log_message(f"   🎯 Placed particles at farthest candidates from discovered regions", emoji="🎯")
+            self.log_message(f"🚀 Farthest-point boost applied to {n_boost}/{self.n_particles} particles ({boost_percentage:.1f}%) (global best particle #{global_best_particle_idx} protected)")
+            self.log_message(f"📊 Selection: High pbest (≥{fitness_threshold:.0e}): {high_fitness_count}, Low pbest: {low_fitness_count}")
+            self.log_message(f"📈 Boosted particles pbest - Min: {before_boost_stats['min']:.6e}, Avg: {before_boost_stats['mean']:.6e}, Max: {before_boost_stats['max']:.6e}")
+            self.log_message(f"🔄 Reset pbest for all boosted particles - fresh start opportunity")
+            self.log_message(f"🎯 Placed particles at farthest candidates from discovered regions")
             
             # Show "after boost" statistics if we have data from previous boost
             if hasattr(self, 'last_boosted_indices') and hasattr(self, 'last_boost_iteration') and self.last_boost_iteration == iteration - self.reinit_interval:
@@ -2680,11 +2780,11 @@ class GlobalBestPSO(SwarmOptimizer):
                     'max': np.max(prev_boosted_current_fitness),
                     'mean': np.mean(prev_boosted_current_fitness)
                 }
-                self.log_message(f"   � Preveious boosted particles fitness - Min: {after_boost_stats['min']:.6e}, Avg: {after_boost_stats['mean']:.6e}, Max: {after_boost_stats['max']:.6e}", emoji="📉")
+                self.log_message(f"� Preveious boosted particles fitness - Min: {after_boost_stats['min']:.6e}, Avg: {after_boost_stats['mean']:.6e}, Max: {after_boost_stats['max']:.6e}")
             
         else:
             # Fallback to traditional boost
-            self.log_message("⚠️ Distance maximization failed, using traditional boost", emoji="⚠️")
+            self.log_message("⚠️ Distance maximization failed, using traditional boost")
             self._boost_particles_traditional(iteration)
 
     def _select_particles_for_boost(self):
@@ -2763,7 +2863,7 @@ class GlobalBestPSO(SwarmOptimizer):
         """Initialize the sparse exploration grid for tracking visited regions"""
         
         if self.bounds is None:
-            self.log_message("⚠️ Cannot initialize exploration grid without bounds", emoji="⚠️")
+            self.log_message("⚠️ Cannot initialize exploration grid without bounds")
             return
         
         # Set grid resolution based on problem dimensions (if not already set)
@@ -2784,7 +2884,7 @@ class GlobalBestPSO(SwarmOptimizer):
         self._discovered_coords = deque(maxlen=self.fp_discovered_cap)
         
         # visited_cells set is already initialized in __init__
-        self.log_message(f"🗺️ Initialized sparse exploration grid: {self.grid_resolution}^{self.dimensions} = {self._total_grid_cells:,} cells", emoji="🗺️")
+        self.log_message(f"🗺️ Initialized sparse exploration grid: {self.grid_resolution}^{self.dimensions} = {self._total_grid_cells:,} cells")
 
     def _update_exploration_grid(self, positions):
         """Update sparse exploration grid with visited positions"""
@@ -2823,7 +2923,7 @@ class GlobalBestPSO(SwarmOptimizer):
             
             if len(anchors) == 0:
                 # No anchors yet, use initialization strategy
-                self.log_message("🎯 No discovered anchors, using LHS initialization", emoji="🎯")
+                self.log_message("🎯 No discovered anchors, using LHS initialization")
                 return self._generate_latin_hypercube_positions(n_particles, self.bounds)
             
             # Convert anchors to numpy and cap to discovered_cap
@@ -2865,10 +2965,10 @@ class GlobalBestPSO(SwarmOptimizer):
                 # Optional: mask out selected index to avoid reselection
                 nearest_dist[best_idx] = -np.inf
             
-            self.log_message(f"📌 Farthest-point selected {len(selected)} positions from {C} candidates and {anchors_np.shape[0]} anchors", emoji="📌")
+            self.log_message(f"📌 Farthest-point selected {len(selected)} positions from {C} candidates and {anchors_np.shape[0]} anchors")
             return np.asarray(selected, dtype=np.float64)
         except Exception as e:
-            self.log_message(f"⚠️ Farthest-point sampling failed: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Farthest-point sampling failed: {e}")
             return self._generate_latin_hypercube_positions(n_particles, self.bounds)
 
     def _generate_candidate_positions(self, n_candidates):
@@ -2929,12 +3029,12 @@ class GlobalBestPSO(SwarmOptimizer):
             
             # Log blacklist impact
             if blacklisted_rejections > 0:
-                self.log_message(f"🚫 Rejected {blacklisted_rejections} blacklisted candidates during farthest-point sampling", emoji="🚫")
+                self.log_message(f"🚫 Rejected {blacklisted_rejections} blacklisted candidates during farthest-point sampling")
             
             return np.asarray(valid_candidates[:n_candidates])
             
         except Exception as e:
-            self.log_message(f"⚠️ Candidate generation failed: {e}, using uniform fallback", emoji="⚠️")
+            self.log_message(f"⚠️ Candidate generation failed: {e}, using uniform fallback")
             if self.bounds is not None:
                 lower, upper = self.bounds
                 return np.random.uniform(lower, upper, size=(n_candidates, self.dimensions))
@@ -2982,7 +3082,7 @@ class GlobalBestPSO(SwarmOptimizer):
             return
         
         if not hasattr(self, 'grid_resolution') or self.bounds is None:
-            self.log_message("⚠️ Competition requires exploration grid and bounds, skipping", emoji="⚠️")
+            self.log_message("⚠️ Competition requires exploration grid and bounds, skipping")
             return
         
         # Step 1: Update cell occupancy mapping
@@ -3010,7 +3110,7 @@ class GlobalBestPSO(SwarmOptimizer):
         # Log competition results
         if particles_to_relocate:
             global_best_particle_idx = self._get_global_best_particle_idx()
-            self.log_message(f"⚔️ Competitive evolution: relocated {len(particles_to_relocate)} particles (global best particle #{global_best_particle_idx} protected)", emoji="⚔️")
+            self.log_message(f"⚔️ Competitive evolution: relocated {len(particles_to_relocate)} particles (global best particle #{global_best_particle_idx} protected)")
 
     def _update_cell_occupancy(self):
         """Update mapping of grid cells to particle indices"""
@@ -3089,7 +3189,7 @@ class GlobalBestPSO(SwarmOptimizer):
                     relocated_count += 1
         
         if overcrowded_cells > 0:
-            self.log_message(f"   📊 Overcrowding: {overcrowded_cells} cells exceed {self.max_particles_per_cell} particles", emoji="📊")
+            self.log_message(f"📊 Overcrowding: {overcrowded_cells} cells exceed {self.max_particles_per_cell} particles")
         
         return particles_to_relocate
 
@@ -3136,7 +3236,7 @@ class GlobalBestPSO(SwarmOptimizer):
                     relocated_count += 1
         
         if stagnant_cells > 0:
-            self.log_message(f"   🐌 Stagnation: {stagnant_cells} cells with unchanged cell-best for {self.stagnation_window}+ iterations", emoji="🐌")
+            self.log_message(f"🐌 Stagnation: {stagnant_cells} cells with unchanged cell-best for {self.stagnation_window}+ iterations")
         
         return particles_to_relocate
 
@@ -3209,7 +3309,7 @@ class GlobalBestPSO(SwarmOptimizer):
         unvisited_positions = self._sample_unvisited_positions(len(particles_to_relocate))
         
         if len(unvisited_positions) == 0:
-            self.log_message("⚠️ No unvisited positions available for relocation", emoji="⚠️")
+            self.log_message("⚠️ No unvisited positions available for relocation")
             return
         
         # Relocate particles
@@ -3243,8 +3343,8 @@ class GlobalBestPSO(SwarmOptimizer):
                 stagnation_count += 1
         
         # Log relocation details
-        self.log_message(f"   🚀 Relocated {relocated_count} particles: {overcrowding_count} overcrowding, {stagnation_count} stagnation", emoji="🚀")
-        self.log_message(f"   🎯 Particles placed in unvisited regions with fresh velocities and reset pbest", emoji="🎯")
+        self.log_message(f"🚀 Relocated {relocated_count} particles: {overcrowding_count} overcrowding, {stagnation_count} stagnation")
+        self.log_message(f"🎯 Particles placed in unvisited regions with fresh velocities and reset pbest")
         
         # Calculate and log average cell density on populated cells
         if hasattr(self, 'cell_occupancy') and self.cell_occupancy:
@@ -3254,7 +3354,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 max_density = max(populated_cells)
                 min_density = min(populated_cells)
                 total_populated_cells = len(populated_cells)
-                self.log_message(f"   📊 Cell density: avg {avg_density:.2f}, min {min_density}, max {max_density} particles/cell ({total_populated_cells} populated cells)", emoji="📊")
+                self.log_message(f"📊 Cell density: avg {avg_density:.2f}, min {min_density}, max {max_density} particles/cell ({total_populated_cells} populated cells)")
 
     def _sample_unvisited_positions(self, n_positions):
         """Sample positions in unvisited and non-blacklisted grid cells using LHS"""
@@ -3301,12 +3401,12 @@ class GlobalBestPSO(SwarmOptimizer):
             
             # Log blacklist impact
             if blacklisted_rejections > 0:
-                self.log_message(f"🚫 Rejected {blacklisted_rejections} blacklisted candidates during sampling", emoji="🚫")
+                self.log_message(f"🚫 Rejected {blacklisted_rejections} blacklisted candidates during sampling")
             
             return valid_positions[:n_positions]
             
         except Exception as e:
-            self.log_message(f"⚠️ Error sampling unvisited positions: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error sampling unvisited positions: {e}")
             return []
 
     def _uniform_sample_unvisited_cells(self, n_positions):
@@ -3331,7 +3431,7 @@ class GlobalBestPSO(SwarmOptimizer):
                     valid_coords.append(coords)
             
             if len(valid_coords) == 0:
-                self.log_message("⚠️ No valid (unvisited + non-blacklisted) cells available", emoji="⚠️")
+                self.log_message("⚠️ No valid (unvisited + non-blacklisted) cells available")
                 return []
             
             # Sample random valid coordinates
@@ -3348,8 +3448,312 @@ class GlobalBestPSO(SwarmOptimizer):
             return positions
             
         except Exception as e:
-            self.log_message(f"⚠️ Error in uniform sampling fallback: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error in uniform sampling fallback: {e}")
             return []
+
+    def _get_global_best_particle_idx(self):
+        """Get the index of the particle with the global best personal best fitness
+        
+        Returns
+        -------
+        int
+            Index of the particle with the best personal best fitness
+        """
+        return np.argmin(self.swarm.pbest_cost)
+
+    def _standard_initialization(self, objective_func, **kwargs):
+        """Standard PSO initialization without 10n selection
+        
+        Parameters
+        ----------
+        objective_func : callable
+            Objective function for evaluation
+        **kwargs : dict
+            Additional arguments for objective function
+        """
+        # Use advanced initialization strategy for better space coverage
+        self.swarm.position = self._initialize_positions_with_strategy(self.n_particles, self.bounds)
+        
+        # Initialize velocities based on position bounds
+        if self.velocity_clamp is not None:
+            min_vel, max_vel = self.velocity_clamp
+            self.swarm.velocity = np.random.uniform(min_vel, max_vel, (self.n_particles, self.dimensions))
+        else:
+            # Default velocity initialization based on position range
+            if self.bounds is not None:
+                lower_bounds, upper_bounds = self.bounds
+                vel_range = 0.1 * (upper_bounds - lower_bounds)  # 10% of parameter range
+                self.swarm.velocity = np.random.uniform(-vel_range, vel_range, (self.n_particles, self.dimensions))
+            else:
+                # Fallback velocity initialization
+                self.swarm.velocity = np.random.uniform(-0.1, 0.1, (self.n_particles, self.dimensions))
+        
+        # Handle init_pos injection for fresh start
+        if self.custom_init_pos is not None:
+            self._inject_init_pos_fresh_start()
+        
+        # Initialize pbest arrays before evaluation
+        self.swarm.pbest_pos = self.swarm.position.copy()
+        self.swarm.pbest_cost = np.full(self.n_particles, np.inf)
+        
+        # Evaluate all particles to get proper fitness values (not np.inf)
+        self.swarm.current_cost = compute_objective_function(self.swarm, objective_func, pool=None, **kwargs)
+        self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
+        self.swarm.best_pos, self.swarm.best_cost = self.top.compute_gbest(self.swarm)
+
+    def _run_10n_selection(self, iteration, objective_func, is_fresh_start=False, is_checkpoint_resume=False, is_periodic=False, **kwargs):
+        """Run adaptive quality selection: sample batches until we have n particles below threshold
+        
+        This method keeps sampling batches of selection_multiplier*n candidates until it finds
+        n particles with fitness below negative_fitness_threshold. Each batch uses fresh LHS sampling.
+        
+        Parameters
+        ----------
+        iteration : int
+            Current iteration number
+        objective_func : callable
+            Objective function for evaluation
+        is_fresh_start : bool
+            True if this is a fresh start (iteration 0)
+        is_checkpoint_resume : bool
+            True if this is a checkpoint resume
+        is_periodic : bool
+            True if this is a periodic selection (every N iterations)
+        **kwargs : dict
+            Additional arguments for objective function
+        """
+        try:
+            # Determine selection type for logging
+            if is_fresh_start:
+                selection_type = "Fresh Start"
+                log_emoji = "🚀"
+            elif is_checkpoint_resume:
+                selection_type = "Checkpoint Resume"
+                log_emoji = "🔄"
+            elif is_periodic:
+                selection_type = f"Periodic (iter {iteration})"
+                log_emoji = "🔁"
+            else:
+                selection_type = "Unknown"
+                log_emoji = "❓"
+            
+            # Get fitness threshold from scout config
+            fitness_threshold = self.scout_config['negative_fitness_threshold']
+            batch_size = self.n_particles * self.selection_multiplier
+            max_batches = 100
+            
+            # Calculate target number of quality particles based on percentage
+            target_quality_particles = int(self.n_particles * self.selection_quality_threshold_pct / 100.0)
+            target_quality_particles = max(1, target_quality_particles)  # At least 1
+            
+            self.log_message(
+                f"{log_emoji} {selection_type}: Adaptive quality selection\n"
+                f"   Target: {target_quality_particles}/{self.n_particles} particles with fitness < {fitness_threshold:.0e} ({self.selection_quality_threshold_pct:.0f}%)\n"
+                f"   Batch size: {batch_size} candidates ({self.selection_multiplier}n)\n"
+                f"   Max batches: {max_batches}",
+                emoji=log_emoji
+            )
+            
+            # Collect good candidates across batches
+            good_positions = []
+            good_fitness = []
+            total_evaluated = 0
+            batch_count = 0
+            eval_start_time = time.time()
+            
+            # Handle init_pos injection for fresh start (add to first batch)
+            inject_init_pos = is_fresh_start and self.custom_init_pos is not None
+            
+            # Sample batches until we have enough good candidates
+            while len(good_positions) < target_quality_particles and batch_count < max_batches:
+                batch_count += 1
+                
+                # Generate batch with fresh LHS sampling
+                batch_positions = self._initialize_positions_with_strategy(batch_size, self.bounds)
+                
+                # Inject init_pos into first batch if needed
+                if inject_init_pos and batch_count == 1:
+                    batch_positions[0] = np.array(self.custom_init_pos)
+                    self.log_message("🎯 Injected init_pos into first batch")
+                
+                # Evaluate batch
+                temp_swarm = type('TempSwarm', (), {})()
+                temp_swarm.position = batch_positions
+                batch_fitness = compute_objective_function(temp_swarm, objective_func, pool=None, **kwargs)
+                
+                # Keep candidates below threshold
+                good_mask = batch_fitness < fitness_threshold
+                n_good_in_batch = np.sum(good_mask)
+                
+                if n_good_in_batch > 0:
+                    good_positions.extend(batch_positions[good_mask])
+                    good_fitness.extend(batch_fitness[good_mask])
+                
+                total_evaluated += batch_size
+                
+                # Log batch progress
+                self.log_message(
+                    f"   Batch {batch_count}: {n_good_in_batch}/{batch_size} below threshold "
+                    f"(total good: {len(good_positions)}/{target_quality_particles})"
+                )
+            
+            eval_time = time.time() - eval_start_time
+            
+            # Handle results based on how many good candidates we found
+            if len(good_positions) >= target_quality_particles:
+                # Success - we have enough good candidates
+                good_positions = np.array(good_positions)
+                good_fitness = np.array(good_fitness)
+                
+                # For fresh start, select best n from good candidates
+                # For resume/periodic, combine with existing particles
+                if is_fresh_start:
+                    # Fresh start - only use good candidates
+                    all_positions = good_positions
+                    all_fitness = good_fitness
+                    n_existing = 0
+                else:
+                    # Combine with existing particles
+                    existing_positions = self.swarm.position.copy()
+                    existing_fitness = self.swarm.pbest_cost.copy()
+                    
+                    all_positions = np.vstack([existing_positions, good_positions])
+                    all_fitness = np.concatenate([existing_fitness, good_fitness])
+                    n_existing = self.n_particles
+                
+                # Select best n
+                best_indices = np.argsort(all_fitness)[:self.n_particles]
+                
+                # Count existing vs new
+                if n_existing > 0:
+                    n_existing_kept = np.sum(best_indices < n_existing)
+                    n_new_selected = self.n_particles - n_existing_kept
+                else:
+                    n_existing_kept = 0
+                    n_new_selected = self.n_particles
+                
+                # Update swarm
+                self.swarm.position = all_positions[best_indices].copy()
+                self.swarm.pbest_pos = self.swarm.position.copy()
+                self.swarm.pbest_cost = all_fitness[best_indices].copy()
+                
+                # Count how many of the selected particles are actually below threshold
+                n_below_threshold = np.sum(self.swarm.pbest_cost < fitness_threshold)
+                pct_below_threshold = (n_below_threshold / self.n_particles) * 100.0
+                
+                # Log success
+                self.log_message(
+                    f"✅ {selection_type} selection complete:\n"
+                    f"   Found {len(good_positions)} quality particles in {batch_count} batches\n"
+                    f"   Evaluated {total_evaluated} candidates in {eval_time:.1f}s\n"
+                    f"   Existing kept: {n_existing_kept}, New selected: {n_new_selected}\n"
+                    f"   Selected particles below threshold: {n_below_threshold}/{self.n_particles} ({pct_below_threshold:.1f}%)\n"
+                    f"   Best fitness: {all_fitness[best_indices[0]]:.6e}\n"
+                    f"   Worst selected: {all_fitness[best_indices[-1]]:.6e}\n"
+                    f"   Median selected: {np.median(all_fitness[best_indices]):.6e}",
+                    emoji="✅"
+                )
+                
+            else:
+                # Fallback - didn't find enough good candidates
+                self.log_message(
+                    f"⚠️ Only found {len(good_positions)} particles below threshold after {max_batches} batches\n"
+                    f"   Target was {target_quality_particles} ({self.selection_quality_threshold_pct:.0f}%)\n"
+                    f"   Evaluated {total_evaluated} candidates in {eval_time:.1f}s\n"
+                    f"   Falling back to best {self.n_particles} from all evaluated",
+                    emoji="⚠️"
+                )
+                
+                # Collect all evaluated candidates
+                # We need to re-evaluate or keep track - for now, use good ones + sample more
+                if len(good_positions) > 0:
+                    good_positions = np.array(good_positions)
+                    good_fitness = np.array(good_fitness)
+                    
+                    # Need more candidates - sample additional batch and take best regardless of threshold
+                    additional_needed = self.n_particles - len(good_positions)
+                    additional_positions = self._initialize_positions_with_strategy(additional_needed, self.bounds)
+                    
+                    temp_swarm = type('TempSwarm', (), {})()
+                    temp_swarm.position = additional_positions
+                    additional_fitness = compute_objective_function(temp_swarm, objective_func, pool=None, **kwargs)
+                    
+                    # Combine good + additional
+                    all_positions = np.vstack([good_positions, additional_positions])
+                    all_fitness = np.concatenate([good_fitness, additional_fitness])
+                else:
+                    # No good candidates found at all - sample fresh batch
+                    all_positions = self._initialize_positions_with_strategy(self.n_particles, self.bounds)
+                    temp_swarm = type('TempSwarm', (), {})()
+                    temp_swarm.position = all_positions
+                    all_fitness = compute_objective_function(temp_swarm, objective_func, pool=None, **kwargs)
+                
+                # For resume/periodic, combine with existing
+                if not is_fresh_start:
+                    existing_positions = self.swarm.position.copy()
+                    existing_fitness = self.swarm.pbest_cost.copy()
+                    all_positions = np.vstack([existing_positions, all_positions])
+                    all_fitness = np.concatenate([existing_fitness, all_fitness])
+                
+                # Select best n
+                best_indices = np.argsort(all_fitness)[:self.n_particles]
+                
+                # Update swarm
+                self.swarm.position = all_positions[best_indices].copy()
+                self.swarm.pbest_pos = self.swarm.position.copy()
+                self.swarm.pbest_cost = all_fitness[best_indices].copy()
+            
+            # Initialize velocities for all selected particles
+            self.swarm.velocity = self._initialize_velocities_for_particles(self.n_particles)
+            
+            # Update global best
+            old_global_best = self.swarm.best_cost if hasattr(self.swarm, 'best_cost') else np.inf
+            self.swarm.best_pos, self.swarm.best_cost = self.top.compute_gbest(self.swarm)
+            
+            # Check if global best improved
+            if self.swarm.best_cost < old_global_best:
+                improvement = old_global_best - self.swarm.best_cost
+                self.log_message(
+                    f"🎉 Global best improved by adaptive selection! "
+                    f"{old_global_best:.6e} → {self.swarm.best_cost:.6e} (Δ {improvement:.6e})",
+                    emoji="🎉"
+                )
+            
+            # Update current_cost for consistency
+            self.swarm.current_cost = self.swarm.pbest_cost.copy()
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error in adaptive quality selection: {e}", emoji="⚠️")
+            # Fallback to standard initialization if this is fresh start
+            if is_fresh_start:
+                self.log_message("⚠️ Falling back to standard initialization", emoji="⚠️")
+                self._standard_initialization(objective_func, **kwargs)
+
+    def _initialize_velocities_for_particles(self, n_particles):
+        """Initialize velocities for n particles
+        
+        Parameters
+        ----------
+        n_particles : int
+            Number of particles to initialize velocities for
+            
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_particles, dimensions) with initialized velocities
+        """
+        if self.velocity_clamp is not None:
+            min_vel, max_vel = self.velocity_clamp
+            return np.random.uniform(min_vel, max_vel, (n_particles, self.dimensions))
+        else:
+            # Default velocity initialization based on position range
+            if self.bounds is not None:
+                lower_bounds, upper_bounds = self.bounds
+                vel_range = 0.1 * (upper_bounds - lower_bounds)  # 10% of parameter range
+                return np.random.uniform(-vel_range, vel_range, (n_particles, self.dimensions))
+            else:
+                # Fallback velocity initialization
+                return np.random.uniform(-0.1, 0.1, (n_particles, self.dimensions))
 
     def _get_global_best_particle_idx(self):
         """Get the index of the particle with the global best personal best fitness
@@ -3442,16 +3846,16 @@ class GlobalBestPSO(SwarmOptimizer):
         
         # Log blacklist changes
         if newly_blacklisted:
-            self.log_message(f"🚫 Blacklisted {len(newly_blacklisted)} cells (poor fitness or stagnation)", emoji="🚫")
+            self.log_message(f"🚫 Blacklisted {len(newly_blacklisted)} cells (poor fitness or stagnation)")
         
         if removed_from_blacklist:
-            self.log_message(f"✅ Removed {len(removed_from_blacklist)} cells from blacklist (improvement detected)", emoji="✅")
+            self.log_message(f"✅ Removed {len(removed_from_blacklist)} cells from blacklist (improvement detected)")
         
         # Log current blacklist status
         if len(self.blacklisted_cells) > 0:
             total_cells = getattr(self, '_total_grid_cells', 1)
             blacklist_percentage = (len(self.blacklisted_cells) / total_cells) * 100
-            self.log_message(f"🚫 Current blacklist: {len(self.blacklisted_cells):,} cells ({blacklist_percentage:.2f}% of search space)", emoji="🚫")
+            self.log_message(f"🚫 Current blacklist: {len(self.blacklisted_cells):,} cells ({blacklist_percentage:.2f}% of search space)")
 
     def get_competition_stats(self):
         """Get current competitive evolution and blacklist statistics
@@ -3523,15 +3927,17 @@ class GlobalBestPSO(SwarmOptimizer):
             base_threshold = self.scout_config['negative_fitness_threshold']
             current_global_best = self.swarm.best_cost
             
-            if current_global_best < 0:
-                negative_threshold = 0  # Only spawn in truly negative regions
-                if not hasattr(self, '_adaptive_threshold_logged'):
-                    self.log_message(
-                        f"🎯 Adaptive threshold activated: global best {current_global_best:.6e} < 0, "
-                        f"negative_fitness_threshold → 0 (was {base_threshold:.0e})",
-                        emoji="🎯"
-                    )
-                    self._adaptive_threshold_logged = True
+            if self.scout_config.get('adaptive_negative_fitness_threshold_enabled', False):
+                if current_global_best < 0:
+                    negative_threshold = 0  # Only spawn in truly negative regions
+                    if not hasattr(self, '_adaptive_threshold_logged'):
+                        self.log_message(
+                            f"🎯 Adaptive threshold activated: global best {current_global_best:.6e} < 0, "
+                            f"negative_fitness_threshold → 0 (was {base_threshold:.0e})"
+                        )
+                        self._adaptive_threshold_logged = True
+                else:
+                    negative_threshold = base_threshold
             else:
                 negative_threshold = base_threshold
             
@@ -3618,17 +4024,20 @@ class GlobalBestPSO(SwarmOptimizer):
                 )
                 
         except Exception as e:
-            self.log_message(f"⚠️ Error in _detect_and_spawn_scouts: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error in _detect_and_spawn_scouts: {e}")
 
     def _spawn_scout_group(self, spawner_particle_id, spawn_point, trigger_fitness, iteration):
-        """Create a new hill scout group at the specified spawn point
+        """Create a new scout group at the specified spawn point
+        
+        Uses Latin Hypercube Sampling (LHS) to initialize scout positions in a hypercube
+        centered around the spawn point. This provides good initial coverage of the local region.
         
         Parameters
         ----------
         spawner_particle_id : int
             Index of the PSO particle that triggered spawning
         spawn_point : np.ndarray
-            Position where the hill scout group should be spawned
+            Position where the scout group should be spawned
         trigger_fitness : float
             Fitness value that triggered the spawning
         iteration : int
@@ -3644,29 +4053,31 @@ class GlobalBestPSO(SwarmOptimizer):
             group_id = f"hc_group_{self._next_group_id}"
             self._next_group_id += 1
             
-            # Create hill scout particles for this group
-            scout_ids = []
             scouts_per_spawn = self.scout_config['scouts_per_spawn']
             
+            # Generate LHS positions in hypercube around spawn point
+            scout_positions = self._generate_lhs_positions(spawn_point, scouts_per_spawn)
+            
+            # Create scout particles with LHS positions
+            scout_ids = []
             for i in range(scouts_per_spawn):
                 scout_id = f"hc_{self._next_scout_id}"
                 self._next_scout_id += 1
                 
-                # Initialize hill scout particle at spawn point
+                # Initialize scout particle at LHS position
                 scout_particle = {
                     'id': scout_id,
-                    'position': spawn_point.copy(),
+                    'position': scout_positions[i].copy(),
                     'velocity': np.zeros(self.dimensions),  # Start with zero velocity
                     'group_id': group_id,
-                    'assigned_point': None,  # Will be set during hill climbing phase
-                    'local_best': spawn_point.copy(),
+                    'local_best': scout_positions[i].copy(),
                     'local_best_fitness': np.inf
                 }
                 
                 self.scout_particles[scout_id] = scout_particle
                 scout_ids.append(scout_id)
             
-            # Create hill scout group
+            # Create scout group (simplified - no phase system)
             scout_group = {
                 'id': group_id,
                 'spawner_id': spawner_particle_id,
@@ -3675,14 +4086,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 'best_fitness': trigger_fitness,
                 'remaining_iterations': self.scout_config['scout_lifetime'],
                 'scout_ids': scout_ids,
-                'phase': 'radial_sampling',
-                'ocean_hit_percentage': 0.0,
-                'best_M_points': [],
-                'current_radius': None,
-                'radius_increment': None,
-                'samples_taken': 0,
-                'ocean_hits': 0,
-                'radial_sampling_iterations': 0  # Track number of radial sampling iterations performed
+                'spawn_iteration': iteration,  # Track when this group was spawned
             }
             
             self.active_scout_groups[group_id] = scout_group
@@ -3690,8 +4094,163 @@ class GlobalBestPSO(SwarmOptimizer):
             return group_id
             
         except Exception as e:
-            self.log_message(f"⚠️ Failed to spawn hill scout group: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Failed to spawn scout group: {e}")
             return None
+
+    def _generate_lhs_positions_around_center(self, center_point, hypercube_percentage, n_positions):
+        """Generate positions using Latin Hypercube Sampling around a center point
+        
+        This is a general-purpose LHS function used for:
+        1. Initial scout spawning (center=spawn_point, percentage=spawn_lhs_percentage)
+        2. Scout neighbor generation (center=scout_position, percentage=initial_search_radius_percentage)
+        
+        Parameters
+        ----------
+        center_point : np.ndarray
+            Center point for the LHS hypercube
+        hypercube_percentage : float
+            Size of hypercube as percentage of parameter ranges (0.0 to 1.0)
+        n_positions : int
+            Number of positions to generate
+            
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_positions, dimensions) with LHS positions
+        """
+        try:
+            # Calculate hypercube bounds centered at center_point
+            if self.bounds is not None:
+                lower_bounds, upper_bounds = self.bounds
+                parameter_ranges = upper_bounds - lower_bounds
+                half_ranges = hypercube_percentage * parameter_ranges / 2
+                hypercube_lower = center_point - half_ranges
+                hypercube_upper = center_point + half_ranges
+                
+                # Clip to global bounds
+                hypercube_lower = np.maximum(hypercube_lower, lower_bounds)
+                hypercube_upper = np.minimum(hypercube_upper, upper_bounds)
+            else:
+                # Fallback if no bounds
+                half_ranges = hypercube_percentage * np.abs(center_point)
+                hypercube_lower = center_point - half_ranges
+                hypercube_upper = center_point + half_ranges
+            
+            # Generate LHS samples
+            if SCIPY_AVAILABLE:
+                from scipy.stats import qmc
+                sampler = qmc.LatinHypercube(d=self.dimensions, seed=np.random.randint(0, 2**31))
+                unit_samples = sampler.random(n=n_positions)
+                
+                # Scale to hypercube bounds
+                lhs_positions = qmc.scale(unit_samples, hypercube_lower, hypercube_upper)
+            else:
+                # Fallback to uniform random if scipy not available
+                self.log_message("⚠️ SciPy not available, using uniform random instead of LHS")
+                lhs_positions = np.random.uniform(hypercube_lower, hypercube_upper, (n_positions, self.dimensions))
+            
+            return lhs_positions
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error generating LHS positions: {e}, using center point")
+            # Fallback: return center point for all positions
+            return np.tile(center_point, (n_positions, 1))
+
+    def _generate_lhs_positions(self, spawn_point, n_positions):
+        """Generate positions using Latin Hypercube Sampling around spawn point
+        
+        This is a wrapper for initial scout spawning that uses the shared LHS function.
+        
+        Parameters
+        ----------
+        spawn_point : np.ndarray
+            Center point for the LHS hypercube
+        n_positions : int
+            Number of positions to generate
+            
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_positions, dimensions) with LHS positions
+        """
+        return self._generate_lhs_positions_around_center(
+            spawn_point,
+            self.scout_config['spawn_lhs_percentage'],
+            n_positions
+        )
+
+    def _generate_scout_neighbors(self):
+        """Generate LHS neighbors for all active scouts
+        
+        For each scout, generates local_search_neighbors positions using LHS
+        in a hypercube centered at the scout's current position. These neighbors
+        will be evaluated in the batch system along with PSO particles and scouts.
+        
+        The neighbors are stored in each scout's data structure for later evaluation.
+        """
+        if not self.scout_config['enable_scouts']:
+            return
+        
+        try:
+            n_neighbors = self.scout_config['local_search_neighbors']
+            radius_pct = self.scout_config['initial_search_radius_percentage']
+            
+            # Get current search radius from group (adaptive)
+            for group_id, group in self.active_scout_groups.items():
+                try:
+                    scout_ids = group['scout_ids']
+                    
+                    # Get adaptive search radius for this group
+                    if 'search_radius' in group:
+                        # Use adaptive radius (as percentage of parameter ranges)
+                        if self.bounds is not None:
+                            lower_bounds, upper_bounds = self.bounds
+                            parameter_ranges = upper_bounds - lower_bounds
+                            # Convert absolute radius back to percentage
+                            adaptive_radius_pct = np.mean(group['search_radius'] / parameter_ranges)
+                        else:
+                            adaptive_radius_pct = radius_pct
+                    else:
+                        # Use initial radius
+                        adaptive_radius_pct = radius_pct
+                    
+                    # Generate neighbors for each scout in the group
+                    for scout_id in scout_ids:
+                        if scout_id not in self.scout_particles:
+                            continue
+                        
+                        try:
+                            scout = self.scout_particles[scout_id]
+                            current_position = scout['position']
+                            
+                            # Generate LHS neighbors around current position
+                            neighbor_positions = self._generate_lhs_positions_around_center(
+                                current_position,
+                                adaptive_radius_pct,
+                                n_neighbors
+                            )
+                            
+                            # Store neighbors in scout data
+                            scout['neighbors'] = neighbor_positions
+                            scout['neighbor_fitness'] = np.full(n_neighbors, np.inf)
+                            
+                        except Exception as e:
+                            self.log_message(
+                                f"⚠️ Error generating neighbors for scout {scout_id}: {e}",
+                                emoji="⚠️"
+                            )
+                            # Fallback: no neighbors for this scout (proper shape)
+                            scout['neighbors'] = np.empty((0, self.dimensions))
+                            scout['neighbor_fitness'] = np.array([])
+                    
+                except Exception as e:
+                    self.log_message(
+                        f"⚠️ Error generating neighbors for group {group_id}: {e}",
+                        emoji="⚠️"
+                    )
+                    
+        except Exception as e:
+            self.log_message(f"⚠️ Error in _generate_scout_neighbors: {e}")
 
     def _record_spawning_event(self, iteration, spawner_particle_id, spawn_point, trigger_fitness, group_id):
         """Record a hill scout spawning event for tracking and analysis
@@ -3736,7 +4295,7 @@ class GlobalBestPSO(SwarmOptimizer):
         """
         try:
             if self.bounds is None:
-                self.log_message("⚠️ No bounds specified, cannot launch spawner particle", emoji="⚠️")
+                self.log_message("⚠️ No bounds specified, cannot launch spawner particle")
                 return
             
             lower_bounds, upper_bounds = self.bounds
@@ -3774,457 +4333,15 @@ class GlobalBestPSO(SwarmOptimizer):
             # This way it can still benefit from hill scout discoveries via attribution
             
         except Exception as e:
-            self.log_message(f"⚠️ Error launching spawner particle {particle_idx}: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error launching spawner particle {particle_idx}: {e}")
 
 
-
-    def _perform_lhs_sampling(self, group_id, objective_func, **kwargs):
-        """Perform LHS hypercube sampling for a hill scout group
-        
-        Parameters
-        ----------
-        group_id : str
-            ID of the hill scout group to perform LHS sampling for
-        objective_func : callable
-            Objective function for evaluation
-        **kwargs : dict
-            Additional arguments for objective function
-            
-        Returns
-        -------
-        bool
-            True if sampling was performed successfully, False otherwise
-        """
-        if group_id not in self.active_scout_groups:
-            return False
-        
-        group = self.active_scout_groups[group_id]
-        
-        # Only perform LHS sampling if in the correct phase
-        if group['phase'] != 'radial_sampling':
-            return False
-        
-        try:
-            from scipy.stats import qmc
-            
-            spawn_point = group['spawn_point']
-            scout_ids = group['scout_ids']
-            
-            # Calculate hypercube bounds
-            if self.bounds is not None:
-                lower_bounds, upper_bounds = self.bounds
-                parameter_ranges = upper_bounds - lower_bounds
-                half_ranges = self.scout_config['spawn_lhs_percentage'] * parameter_ranges / 2
-                hypercube_lower = spawn_point - half_ranges
-                hypercube_upper = spawn_point + half_ranges
-            else:
-                # Fallback if no bounds
-                half_ranges = self.scout_config['spawn_lhs_percentage'] * np.abs(spawn_point)
-                hypercube_lower = spawn_point - half_ranges
-                hypercube_upper = spawn_point + half_ranges
-            
-            # Generate LHS samples
-            sampler = qmc.LatinHypercube(d=self.dimensions)
-            unit_samples = sampler.random(len(scout_ids))
-            
-            # Scale to hypercube bounds
-            sampling_positions = hypercube_lower + unit_samples * (hypercube_upper - hypercube_lower)
-            
-            # Update hill scout particle positions (evaluation happens in main batch)
-            for i, scout_id in enumerate(scout_ids):
-                self.scout_particles[scout_id]['position'] = sampling_positions[i]
-            
-            # Transition directly to hill climbing phase
-            self._transition_to_hill_climbing(group_id)
-            
-            return True
-            
-        except Exception as e:
-            self.log_message(f"⚠️ Error in LHS sampling for group {group_id}: {e}", emoji="⚠️")
-            return False
-
-    def _generate_angular_coverage_positions(self, center_point, radius, num_positions):
-        """Generate positions with maximum angular coverage around a center point
-        
-        Parameters
-        ----------
-        center_point : np.ndarray
-            Center point for radial sampling
-        radius : float
-            Radius for sampling
-        num_positions : int
-            Number of positions to generate
-            
-        Returns
-        -------
-        list of np.ndarray
-            List of positions with maximum angular coverage
-        """
-        positions = []
-        
-        if self.dimensions == 1:
-            # 1D case - sample on both sides
-            for i in range(num_positions):
-                direction = 1 if i % 2 == 0 else -1
-                position = center_point + direction * radius
-                
-                # Ensure position is within bounds if bounds exist
-                if self.bounds is not None:
-                    lower_bounds, upper_bounds = self.bounds
-                    position = np.clip(position, lower_bounds, upper_bounds)
-                
-                positions.append(position)
-        
-        elif self.dimensions == 2:
-            # 2D case - distribute evenly around circle
-            for i in range(num_positions):
-                angle = 2 * np.pi * i / num_positions
-                direction = np.array([np.cos(angle), np.sin(angle)])
-                position = center_point + radius * direction
-                
-                # Ensure position is within bounds if bounds exist
-                if self.bounds is not None:
-                    lower_bounds, upper_bounds = self.bounds
-                    position = np.clip(position, lower_bounds, upper_bounds)
-                
-                positions.append(position)
-        
-        else:
-            # Higher dimensional case - use spherical explosion pattern
-            # Generate random unit vectors and scale by radius
-            for i in range(num_positions):
-                # Generate random direction vector
-                direction = np.random.randn(self.dimensions)
-                direction = direction / np.linalg.norm(direction)  # Normalize to unit vector
-                
-                position = center_point + radius * direction
-                
-                # Ensure position is within bounds if bounds exist
-                if self.bounds is not None:
-                    lower_bounds, upper_bounds = self.bounds
-                    position = np.clip(position, lower_bounds, upper_bounds)
-                
-                positions.append(position)
-        
-        return positions
-
-    def _calculate_ocean_hit_percentage(self, group_id):
-        """Calculate the percentage of samples that returned ocean fitness values
-        
-        Parameters
-        ----------
-        group_id : str
-            ID of the hill scout group
-            
-        Returns
-        -------
-        float
-            Percentage of samples that hit ocean fitness (0-100)
-        """
-        if group_id not in self.active_scout_groups:
-            return 0.0
-        
-        group = self.active_scout_groups[group_id]
-        
-        if group['samples_taken'] == 0:
-            return 0.0
-        
-        return (group['ocean_hits'] / group['samples_taken']) * 100.0
-
-    def _transition_to_hill_climbing(self, group_id):
-        """Transition a hill scout group from radial sampling to hill climbing phase
-        
-        Parameters
-        ----------
-        group_id : str
-            ID of the hill scout group to transition
-            
-        Returns
-        -------
-        bool
-            True if transition was successful, False otherwise
-        """
-        if group_id not in self.active_scout_groups:
-            return False
-        
-        group = self.active_scout_groups[group_id]
-        
-        # Only transition if currently in radial sampling phase
-        if group['phase'] != 'radial_sampling':
-            return False
-        
-        try:
-            # Select the M best points from radial sampling results
-            best_M_points = self._select_best_points(group_id)
-            
-            # Store best points in group
-            group['best_M_points'] = best_M_points
-            
-            # Assign particles to best points
-            self._assign_particles_to_points(group_id)
-            
-            # Change phase to hill climbing
-            group['phase'] = 'hill_climbing'
-            
-            # Reset remaining iterations counter (starts counting down from here)
-            group['remaining_iterations'] = self.scout_config['scout_lifetime']
-            
-            # Log transition
-            ocean_hit_pct = group['ocean_hit_percentage']
-            threshold_pct = self.scout_config['ocean_hit_threshold'] * 100
-            best_fitness = group.get('best_fitness', np.inf)
-            
-            self.log_message(
-                f"🎯 Phase transition - Group {group_id}: radial_sampling → hill_climbing "
-                f"(ocean hits: {ocean_hit_pct:.1f}% ≥ {threshold_pct:.1f}%, "
-                f"best fitness: {best_fitness:.6e}, {len(best_M_points)} best points selected)",
-                emoji="🎯"
-            )
-            
-            return True
-            
-        except Exception as e:
-            self.log_message(f"⚠️ Error transitioning group {group_id} to hill climbing: {e}", emoji="⚠️")
-            return False
-
-    def _select_best_points(self, group_id):
-        """Select the M best points from radial sampling results
-        
-        Parameters
-        ----------
-        group_id : str
-            ID of the hill scout group
-            
-        Returns
-        -------
-        list of np.ndarray
-            List of the M best points from radial sampling
-        """
-        if group_id not in self.active_scout_groups:
-            return []
-        
-        group = self.active_scout_groups[group_id]
-        scout_ids = group['scout_ids']
-        M = len(scout_ids)  # Use all available scouts
-        
-        # Collect all sampled points and their fitness values
-        sampled_points = []
-        fitness_values = []
-        
-        for scout_id in scout_ids:
-            scout = self.scout_particles[scout_id]
-            sampled_points.append(scout['local_best'])
-            fitness_values.append(scout['local_best_fitness'])
-        
-        # Sort by fitness (best first)
-        sorted_indices = np.argsort(fitness_values)
-        
-        # Select the M best points
-        best_M_points = []
-        for i in range(min(M, len(sorted_indices))):
-            idx = sorted_indices[i]
-            best_M_points.append(sampled_points[idx])
-        
-        return best_M_points
-
-    def _assign_particles_to_points(self, group_id):
-        """Assign hill scout particles to the best points for local optimization
-        
-        Parameters
-        ----------
-        group_id : str
-            ID of the hill scout group
-        """
-        if group_id not in self.active_scout_groups:
-            return
-        
-        group = self.active_scout_groups[group_id]
-        best_points = group['best_M_points']
-        scout_ids = group['scout_ids']
-        
-        # Assign each particle to a best point
-        for i, scout_id in enumerate(scout_ids):
-            if i < len(best_points):
-                # Assign to corresponding best point
-                assigned_point = best_points[i]
-            else:
-                # If more particles than best points, assign to random best point
-                assigned_point = best_points[i % len(best_points)]
-            
-            # Update hill scout particle
-            scout = self.scout_particles[scout_id]
-            scout['assigned_point'] = assigned_point.copy()
-            scout['position'] = assigned_point.copy()
-            scout['local_best'] = assigned_point.copy()
-            # Keep the fitness from radial sampling as starting point
-
-    def _perform_hill_climbing(self, group_id, objective_func, **kwargs):
-        """Perform gradient-based local optimization for hill scout particles
-        
-        Parameters
-        ----------
-        group_id : str
-            ID of the hill scout group
-        objective_func : callable
-            Objective function for evaluation
-        **kwargs : dict
-            Additional arguments for objective function
-            
-        Returns
-        -------
-        bool
-            True if hill climbing was performed successfully, False otherwise
-        """
-        if group_id not in self.active_scout_groups:
-            return False
-        
-        group = self.active_scout_groups[group_id]
-        
-        # Only perform hill climbing if in the correct phase
-        if group['phase'] != 'hill_climbing':
-            return False
-        
-        try:
-            scout_ids = group['scout_ids']
-            iteration = getattr(self, '_current_iteration', 0)  # Get current iteration if available
-            
-            # Perform gradient-based optimization for each hill scout particle
-            for scout_id in scout_ids:
-                scout = self.scout_particles[scout_id]
-                current_position = scout['position']
-                current_best_fitness = scout['local_best_fitness']
-                
-                # Simple gradient-based hill climbing using finite differences
-                improved_position, improved_fitness = self._gradient_based_step(
-                    current_position, current_best_fitness, objective_func, **kwargs
-                )
-                
-                # Update particle if improvement found
-                if improved_fitness < current_best_fitness:
-                    scout['position'] = improved_position
-                    scout['local_best'] = improved_position.copy()
-                    scout['local_best_fitness'] = improved_fitness
-                    
-                    # Update group best if this is better
-                    if improved_fitness < group['best_fitness']:
-                        group['best_fitness'] = improved_fitness
-                        group['best_point'] = improved_position.copy()
-                        
-                        # Log improvement
-                        self.log_message(
-                            f"🏔️ Hill climbing improvement - Group {group_id}: "
-                            f"new best fitness {improved_fitness:.6e}",
-                            emoji="🏔️"
-                        )
-                    
-                    # Attribute improvement to spawning PSO particle
-                    self._attribute_improvement(
-                        scout_id=scout_id,
-                        improved_position=improved_position,
-                        improved_fitness=improved_fitness,
-                        iteration=iteration
-                    )
-            
-            # Decrement remaining iterations after hill climbing step
-            group['remaining_iterations'] -= 1
-            
-            return True
-            
-        except Exception as e:
-            self.log_message(f"⚠️ Error in hill climbing for group {group_id}: {e}", emoji="⚠️")
-            return False
-
-    def _gradient_based_step(self, position, current_fitness, objective_func, **kwargs):
-        """Perform a single gradient-based optimization step using finite differences
-        
-        Parameters
-        ----------
-        position : np.ndarray
-            Current position
-        current_fitness : float
-            Current fitness value
-        objective_func : callable
-            Objective function for evaluation
-        **kwargs : dict
-            Additional arguments for objective function
-            
-        Returns
-        -------
-        tuple
-            (improved_position, improved_fitness) if improvement found,
-            otherwise (position, current_fitness)
-        """
-        try:
-            # Step size for finite differences
-            step_size = 1e-6
-            
-            # Calculate gradient using finite differences
-            gradient = np.zeros(self.dimensions)
-            
-            for dim in range(self.dimensions):
-                # Forward step
-                pos_forward = position.copy()
-                pos_forward[dim] += step_size
-                
-                # Backward step
-                pos_backward = position.copy()
-                pos_backward[dim] -= step_size
-                
-                # Ensure positions are within bounds
-                if self.bounds is not None:
-                    lower_bounds, upper_bounds = self.bounds
-                    pos_forward = np.clip(pos_forward, lower_bounds, upper_bounds)
-                    pos_backward = np.clip(pos_backward, lower_bounds, upper_bounds)
-                
-                # Evaluate fitness at forward and backward positions
-                temp_swarm_forward = type('TempSwarm', (), {})()
-                temp_swarm_forward.position = pos_forward.reshape(1, -1)
-                fitness_forward = compute_objective_function(temp_swarm_forward, objective_func, pool=None, **kwargs)[0]
-                
-                temp_swarm_backward = type('TempSwarm', (), {})()
-                temp_swarm_backward.position = pos_backward.reshape(1, -1)
-                fitness_backward = compute_objective_function(temp_swarm_backward, objective_func, pool=None, **kwargs)[0]
-                
-                # Calculate gradient component
-                gradient[dim] = (fitness_forward - fitness_backward) / (2 * step_size)
-            
-            # Adaptive step size based on gradient magnitude
-            gradient_magnitude = np.linalg.norm(gradient)
-            if gradient_magnitude > 0:
-                # Normalize gradient and apply adaptive step
-                if self.bounds is not None:
-                    lower_bounds, upper_bounds = self.bounds
-                    parameter_ranges = upper_bounds - lower_bounds
-                    adaptive_step = 0.01 * np.mean(parameter_ranges)  # 1% of average parameter range
-                else:
-                    adaptive_step = 0.01  # Default step size
-                
-                # Move in opposite direction of gradient (minimize)
-                new_position = position - (adaptive_step / gradient_magnitude) * gradient
-                
-                # Ensure new position is within bounds
-                if self.bounds is not None:
-                    lower_bounds, upper_bounds = self.bounds
-                    new_position = np.clip(new_position, lower_bounds, upper_bounds)
-                
-                # Evaluate new position
-                temp_swarm = type('TempSwarm', (), {})()
-                temp_swarm.position = new_position.reshape(1, -1)
-                new_fitness = compute_objective_function(temp_swarm, objective_func, pool=None, **kwargs)[0]
-                
-                # Return improvement if found
-                if new_fitness < current_fitness:
-                    return new_position, new_fitness
-            
-            # No improvement found
-            return position, current_fitness
-            
-        except Exception as e:
-            # Return original position if error occurs
-            return position, current_fitness
 
     def _process_scout_groups(self, iteration, objective_func, **kwargs):
-        """Process all active hill scout groups for the current iteration
+        """Process all active scout groups using adaptive local search
+        
+        This simplified method performs local search around each scout's current position
+        by generating neighbors and evaluating them in the batch system.
         
         Parameters
         ----------
@@ -4246,19 +4363,13 @@ class GlobalBestPSO(SwarmOptimizer):
                 continue  # Group may have been terminated
             
             group = self.active_scout_groups[group_id]
+            scout_ids = group['scout_ids']
             
-            if group['phase'] == 'radial_sampling':
-                # Perform LHS sampling (position setting only, evaluation happens in main batch)
-                self._perform_lhs_sampling(group_id, objective_func, **kwargs)
-                
-            elif group['phase'] == 'hill_climbing':
-                # Hill climbing positions are updated in _advance_scout_positions
-                # Evaluation happens in main batch system
-                pass
-                
-                # Check if group should be terminated (lifetime expired)
-                if group['remaining_iterations'] <= 0:
-                    self._terminate_scout_group(group_id, iteration)
+            # Generate local search neighbors for each scout
+            # This happens in _advance_scout_positions which is called after evaluation
+            # Here we just check if group should be terminated
+            if group['remaining_iterations'] <= 0:
+                self._terminate_scout_group(group_id, iteration)
 
     def _terminate_scout_group(self, group_id, iteration):
         """Terminate a hill scout group and clean up resources
@@ -4311,7 +4422,7 @@ class GlobalBestPSO(SwarmOptimizer):
             # in self.attribution_records for analysis.
             
         except Exception as e:
-            self.log_message(f"⚠️ Error terminating hill scout group {group_id}: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error terminating hill scout group {group_id}: {e}")
 
     def _attribute_improvement(self, scout_id, improved_position, improved_fitness, iteration):
         """Attribute improvement found by hill scout to its spawning PSO particle
@@ -4348,7 +4459,7 @@ class GlobalBestPSO(SwarmOptimizer):
             
             # Validate spawner particle index
             if spawner_id < 0 or spawner_id >= self.n_particles:
-                self.log_message(f"⚠️ Invalid spawner particle ID {spawner_id} for hill scout {scout_id}", emoji="⚠️")
+                self.log_message(f"⚠️ Invalid spawner particle ID {spawner_id} for hill scout {scout_id}")
                 return False
             
             # Update spawner personal best if improvement is better
@@ -4385,7 +4496,7 @@ class GlobalBestPSO(SwarmOptimizer):
             return spawner_updated or global_updated
             
         except Exception as e:
-            self.log_message(f"⚠️ Error attributing improvement from hill scout {scout_id}: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error attributing improvement from hill scout {scout_id}: {e}")
             return False
 
     def _update_spawner_personal_best(self, spawner_id, improved_position, improved_fitness, scout_id, iteration):
@@ -4436,7 +4547,7 @@ class GlobalBestPSO(SwarmOptimizer):
             return False
             
         except Exception as e:
-            self.log_message(f"⚠️ Error updating spawner #{spawner_id} personal best: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error updating spawner #{spawner_id} personal best: {e}")
             return False
 
     def _update_global_best_from_scout(self, improved_position, improved_fitness, scout_id, spawner_id, iteration):
@@ -4445,7 +4556,9 @@ class GlobalBestPSO(SwarmOptimizer):
         When a hill scout discovers a new global best, this method:
         1. Updates the global best position and fitness
         2. Spawns a new hill scout group at the discovery point
-        3. Attributes the new group to the original spawner particle
+        
+        The new group will automatically be immortal (not decrement lifetime) because
+        its spawn_point will match the global best position.
         
         Parameters
         ----------
@@ -4486,6 +4599,8 @@ class GlobalBestPSO(SwarmOptimizer):
                 
                 # Spawn a new hill scout group at the discovery point
                 # This explores the neighborhood of the new global best
+                # The new group will automatically be immortal since its spawn_point
+                # will match the global best position
                 self._spawn_scout_at_discovery(
                     discovery_position=improved_position,
                     discovery_fitness=improved_fitness,
@@ -4503,7 +4618,7 @@ class GlobalBestPSO(SwarmOptimizer):
             return False
             
         except Exception as e:
-            self.log_message(f"⚠️ Error updating global best from hill scout {scout_id}: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error updating global best from hill scout {scout_id}: {e}")
             return False
 
     def _spawn_scout_at_discovery(self, discovery_position, discovery_fitness, original_spawner_id, discovering_scout_id, iteration):
@@ -4525,6 +4640,11 @@ class GlobalBestPSO(SwarmOptimizer):
             ID of the hill scout that made the discovery
         iteration : int
             Current iteration number
+            
+        Returns
+        -------
+        str or None
+            Group ID if successful, None if spawning failed
         """
         try:
             # Check if we've reached the maximum number of concurrent groups
@@ -4536,7 +4656,7 @@ class GlobalBestPSO(SwarmOptimizer):
                     f"⚠️ Cannot spawn at discovery: max concurrent groups reached ({current_groups}/{max_groups})",
                     emoji="⚠️"
                 )
-                return
+                return None
             
             # Spawn new hill scout group at discovery point
             new_group_id = self._spawn_scout_group(
@@ -4569,8 +4689,11 @@ class GlobalBestPSO(SwarmOptimizer):
                     emoji="🌟"
                 )
             
+            return new_group_id
+            
         except Exception as e:
-            self.log_message(f"⚠️ Error spawning at discovery: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error spawning at discovery: {e}")
+            return None
 
     def get_attribution_stats(self):
         """Get current attribution system statistics
@@ -4611,57 +4734,62 @@ class GlobalBestPSO(SwarmOptimizer):
         return stats
 
     def _create_evaluation_batch(self):
-        """Create evaluation batch combining PSO and hill scout positions
+        """Create evaluation batch combining PSO particles, scouts, and scout neighbors
         
-        This method combines all active particle positions (PSO particles and hill scout
-        particles) into a single batch for parallel evaluation, maintaining an attribution
-        map to distribute results back to the correct particles.
+        This method combines all positions that need evaluation:
+        1. PSO particles (spawners)
+        2. Scout current positions
+        3. Scout neighbors (generated via LHS)
         
-        Performance optimization: Uses pre-allocated arrays and efficient numpy operations
-        for handling large numbers of concurrent hill scout groups.
+        The attribution map tracks which positions belong to which entity for
+        result distribution.
         
         Returns
         -------
         tuple
             (batch_positions, attribution_map) where:
-            - batch_positions: np.ndarray of shape (total_particles, dimensions)
-            - attribution_map: list of dicts with keys 'type' ('pso' or 'scout'),
-              'index' (particle index for PSO) or 'id' (scout ID for hill scouts)
+            - batch_positions: np.ndarray of shape (total_positions, dimensions)
+            - attribution_map: list of dicts with keys:
+              - 'type': 'pso', 'scout', or 'neighbor'
+              - 'index': particle index (for PSO)
+              - 'id': scout ID (for scouts)
+              - 'scout_id': parent scout ID (for neighbors)
+              - 'neighbor_idx': neighbor index within scout (for neighbors)
         """
         try:
-            # Calculate total size for pre-allocation (performance optimization)
+            # Calculate total size for pre-allocation
             n_pso = self.n_particles
             
-            # Filter hill scouts to only include those with valid positions
+            # Filter scouts with valid positions
             valid_scouts = []
+            total_neighbors = 0
+            
             for scout_id, scout in self.scout_particles.items():
                 if 'position' in scout and scout['position'] is not None:
                     if isinstance(scout['position'], np.ndarray) and scout['position'].shape == (self.dimensions,):
                         valid_scouts.append((scout_id, scout))
-                    else:
-                        self.log_message(f"⚠️ Hill scout {scout_id} has invalid position shape, skipping", emoji="⚠️")
-                else:
-                    self.log_message(f"⚠️ Hill scout {scout_id} missing position, skipping", emoji="⚠️")
+                        # Count neighbors for this scout
+                        if 'neighbors' in scout and len(scout['neighbors']) > 0:
+                            total_neighbors += len(scout['neighbors'])
             
             n_scouts = len(valid_scouts)
-            total_particles = n_pso + n_scouts
+            total_positions = n_pso + n_scouts + total_neighbors
             
-            # Pre-allocate arrays for better performance with large numbers of particles
-            batch_positions = np.empty((total_particles, self.dimensions), dtype=np.float64)
+            # Pre-allocate arrays
+            batch_positions = np.empty((total_positions, self.dimensions), dtype=np.float64)
             attribution_map = []
+            current_idx = 0
             
-            # Add all PSO particle positions (vectorized operation)
-            batch_positions[:n_pso] = self.swarm.position
-            
-            # Create attribution map for PSO particles
+            # Add PSO particle positions
+            batch_positions[current_idx:current_idx + n_pso] = self.swarm.position
             for particle_idx in range(n_pso):
                 attribution_map.append({
                     'type': 'pso',
                     'index': particle_idx
                 })
+            current_idx += n_pso
             
-            # Add all valid hill scout particle positions
-            current_idx = n_pso
+            # Add scout positions
             for scout_id, scout in valid_scouts:
                 batch_positions[current_idx] = scout['position']
                 attribution_map.append({
@@ -4670,10 +4798,29 @@ class GlobalBestPSO(SwarmOptimizer):
                 })
                 current_idx += 1
             
+            # Add scout neighbor positions
+            for scout_id, scout in valid_scouts:
+                if 'neighbors' in scout and len(scout['neighbors']) > 0:
+                    neighbors = scout['neighbors']
+                    n_neighbors = len(neighbors)
+                    
+                    # Add all neighbors for this scout
+                    batch_positions[current_idx:current_idx + n_neighbors] = neighbors
+                    
+                    # Create attribution entries for each neighbor
+                    for neighbor_idx in range(n_neighbors):
+                        attribution_map.append({
+                            'type': 'neighbor',
+                            'scout_id': scout_id,
+                            'neighbor_idx': neighbor_idx
+                        })
+                    
+                    current_idx += n_neighbors
+            
             return batch_positions, attribution_map
             
         except Exception as e:
-            self.log_message(f"⚠️ Error creating evaluation batch: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error creating evaluation batch: {e}")
             # Fallback: return just PSO particles
             return self.swarm.position.copy(), [{'type': 'pso', 'index': i} for i in range(self.n_particles)]
 
@@ -4707,10 +4854,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 )
                 return False
             
-            # Performance optimization: Separate PSO and hill scout updates
-            # This allows vectorized operations for PSO particles
-            
-            # First pass: Update all PSO particles (vectorized)
+            # First pass: Update PSO particles (vectorized)
             pso_indices = []
             pso_fitness = []
             
@@ -4719,12 +4863,11 @@ class GlobalBestPSO(SwarmOptimizer):
                     pso_indices.append(attribution['index'])
                     pso_fitness.append(fitness_results[i])
             
-            # Vectorized update for PSO particles with bounds checking
             if pso_indices:
                 pso_indices = np.array(pso_indices)
                 pso_fitness = np.array(pso_fitness)
                 
-                # Validate indices are within bounds
+                # Validate indices
                 valid_mask = (pso_indices >= 0) & (pso_indices < self.n_particles)
                 if not np.all(valid_mask):
                     invalid_indices = pso_indices[~valid_mask]
@@ -4738,57 +4881,100 @@ class GlobalBestPSO(SwarmOptimizer):
                 if len(pso_indices) > 0:
                     self.swarm.current_cost[pso_indices] = pso_fitness
             
-            # Second pass: Update hill scout particles
-            # Store iteration for attribution
+            # Second pass: Collect neighbor fitness for each scout
+            neighbor_fitness_map = {}  # scout_id -> {neighbor_idx: fitness}
+            
+            for i, attribution in enumerate(attribution_map):
+                if attribution['type'] == 'neighbor':
+                    scout_id = attribution['scout_id']
+                    neighbor_idx = attribution['neighbor_idx']
+                    fitness = fitness_results[i]
+                    
+                    if scout_id not in neighbor_fitness_map:
+                        neighbor_fitness_map[scout_id] = {}
+                    neighbor_fitness_map[scout_id][neighbor_idx] = fitness
+            
+            # Third pass: Update scouts and evaluate neighbors
             iteration = getattr(self, '_current_iteration', 0)
             
             for i, attribution in enumerate(attribution_map):
                 if attribution['type'] == 'scout':
                     scout_id = attribution['id']
-                    fitness = fitness_results[i]
+                    scout_fitness = fitness_results[i]
                     
-                    # Update hill scout particle fitness
-                    if scout_id in self.scout_particles:
-                        scout = self.scout_particles[scout_id]
-                        previous_fitness = scout.get('local_best_fitness', np.inf)
+                    if scout_id not in self.scout_particles:
+                        continue
+                    
+                    scout = self.scout_particles[scout_id]
+                    
+                    # Get all neighbor fitness for this scout
+                    neighbor_fitness = neighbor_fitness_map.get(scout_id, {})
+                    
+                    # Find best among scout current position and all neighbors
+                    best_fitness = scout_fitness
+                    best_position = scout['position'].copy()
+                    best_is_neighbor = False
+                    
+                    for neighbor_idx, fitness in neighbor_fitness.items():
+                        if fitness < best_fitness:
+                            best_fitness = fitness
+                            # Safely get neighbor position
+                            if 'neighbors' in scout and len(scout['neighbors']) > 0:
+                                if neighbor_idx < len(scout['neighbors']):
+                                    best_position = scout['neighbors'][neighbor_idx].copy()
+                                    best_is_neighbor = True
+                    
+                    # Update scout if improvement found
+                    previous_best = scout.get('local_best_fitness', np.inf)
+                    
+                    if best_fitness < previous_best:
+                        # Improvement found - move scout to best position
+                        improvement = previous_best - best_fitness
                         
-                        # Update hill scout fitness
-                        scout['local_best_fitness'] = fitness
+                        # Log if a neighbor was better than scout's current position
+                        if best_is_neighbor:
+                            self.log_message(
+                                f"🎯 Scout {scout_id} neighbor improvement: {best_fitness:.6e} (Δ {improvement:.6e})",
+                                emoji="🎯"
+                            )
                         
-                        # If this is an improvement, update local best position
-                        if fitness < previous_fitness:
-                            scout['local_best'] = scout['position'].copy()
-                            
-                            # Attribute improvement to spawning PSO particle
-                            try:
-                                self._attribute_improvement(
-                                    scout_id=scout_id,
-                                    improved_position=scout['position'],
-                                    improved_fitness=fitness,
-                                    iteration=iteration
-                                )
-                            except Exception as e:
-                                self.log_message(
-                                    f"⚠️ Error attributing improvement for scout {scout_id}: {e}",
-                                    emoji="⚠️"
-                                )
+                        scout['position'] = best_position
+                        scout['local_best'] = best_position
+                        scout['local_best_fitness'] = best_fitness
+                        
+                        # Attribute improvement to spawner
+                        try:
+                            self._attribute_improvement(
+                                scout_id=scout_id,
+                                improved_position=best_position,
+                                improved_fitness=best_fitness,
+                                iteration=iteration
+                            )
+                        except Exception as e:
+                            self.log_message(
+                                f"⚠️ Error attributing improvement for scout {scout_id}: {e}",
+                                emoji="⚠️"
+                            )
+                        
+                        # Mark improvement for radius adaptation
+                        scout['improved_this_iteration'] = True
+                    else:
+                        # No improvement
+                        scout['improved_this_iteration'] = False
+                        # Update current fitness even if not improved
+                        scout['local_best_fitness'] = scout_fitness
             
             return True
             
         except Exception as e:
-            self.log_message(f"⚠️ Error distributing evaluation results: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error distributing evaluation results: {e}")
             return False
 
     def _update_scout_phases(self, iteration):
-        """Update hill scout group phases and manage lifecycle
+        """Update scout group lifecycle (simplified - no phase system)
         
-        This method handles phase transitions (radial sampling → hill climbing)
-        and lifecycle management (decrementing lifetimes, terminating expired groups).
-        It should be called after batch evaluation to update group states based on
-        the latest fitness results.
-        
-        Performance optimization: Uses efficient iteration and early termination checks
-        to handle large numbers of concurrent groups.
+        This method manages scout group lifecycle by decrementing lifetimes
+        and terminating expired groups. The phase system has been removed.
         
         Parameters
         ----------
@@ -4802,9 +4988,6 @@ class GlobalBestPSO(SwarmOptimizer):
             # Get list of group IDs to avoid modification during iteration
             group_ids = list(self.active_scout_groups.keys())
             
-            # Performance optimization: Track statistics for batch logging
-            transitions_count = 0
-            
             for group_id in group_ids:
                 if group_id not in self.active_scout_groups:
                     continue  # Group may have been terminated
@@ -4812,192 +4995,109 @@ class GlobalBestPSO(SwarmOptimizer):
                 try:
                     group = self.active_scout_groups[group_id]
                     
-                    if group['phase'] == 'radial_sampling':
-                        # Increment radial sampling iteration counter
-                        group['radial_sampling_iterations'] = group.get('radial_sampling_iterations', 0) + 1
+                    # Check if group should be terminated (lifetime expired)
+                    if group['remaining_iterations'] <= 0:
+                        self._terminate_scout_group(group_id, iteration)
                         
-                        # Require minimum radial sampling iterations before allowing transition (default: 5)
-                        min_radial_sampling_iterations = self.scout_config.get('min_radial_sampling_iterations', 5)
-                        
-                        if group['radial_sampling_iterations'] < min_radial_sampling_iterations:
-                            # Not enough iterations yet, skip transition check
-                            continue
-                        
-                        # Check if we should transition to hill climbing phase
-                        # Update ocean hit percentage based on latest evaluations
-                        ocean_threshold = self.scout_config['ocean_fitness_threshold']
-                        scout_ids = group['scout_ids']
-                        
-                        # Count ocean hits from current fitness values
-                        # IMPORTANT: Only count scouts that have been evaluated (fitness < 1e10)
-                        # Using 1e10 as threshold to detect unevaluated particles (initialized to np.inf)
-                        ocean_hits_this_iter = 0
-                        evaluated_scouts = 0
-                        unevaluated_threshold = 1e10
-                        
-                        for scout_id in scout_ids:
-                            if scout_id in self.scout_particles:
-                                fitness = self.scout_particles[scout_id].get('local_best_fitness', np.inf)
-                                # Only count scouts that have been evaluated (fitness < 1e10)
-                                if fitness < unevaluated_threshold:
-                                    evaluated_scouts += 1
-                                    if fitness > ocean_threshold:
-                                        ocean_hits_this_iter += 1
-                        
-                        # Accumulate ocean hit statistics across all iterations
-                        if evaluated_scouts > 0:
-                            group['samples_taken'] = group.get('samples_taken', 0) + evaluated_scouts
-                            group['ocean_hits'] = group.get('ocean_hits', 0) + ocean_hits_this_iter
-                            
-                            # Calculate accumulated ocean hit percentage
-                            if group['samples_taken'] > 0:
-                                group['ocean_hit_percentage'] = (group['ocean_hits'] / group['samples_taken']) * 100.0
-                            
-                            # Check if we should transition to hill climbing phase
-                            # Only transition if we have enough total samples
-                            min_total_samples = len(scout_ids) * 2  # At least 2 iterations worth of samples
-                            if (group['samples_taken'] >= min_total_samples and 
-                                group['ocean_hit_percentage'] >= self.scout_config['ocean_hit_threshold'] * 100):
-                                if self._transition_to_hill_climbing(group_id):
-                                    transitions_count += 1
-                        else:
-                            # No scouts evaluated yet, keep ocean_hit_percentage at 0
-                            group['ocean_hit_percentage'] = 0.0
-                            
-                    elif group['phase'] == 'hill_climbing':
-                        # Decrement remaining iterations
-                        if group['remaining_iterations'] > 0:
-                            group['remaining_iterations'] -= 1
-                        
-                        # Check if group should be terminated (lifetime expired)
-                        if group['remaining_iterations'] <= 0:
-                            self._terminate_scout_group(group_id, iteration)
-                            
                 except Exception as e:
                     self.log_message(
-                        f"⚠️ Error updating phase for group {group_id}: {e}",
+                        f"⚠️ Error updating lifecycle for group {group_id}: {e}",
                         emoji="⚠️"
                     )
-            
-            # Log batch statistics if any transitions occurred
-            if transitions_count > 0:
-                self.log_message(
-                    f"🔄 Phase transitions: {transitions_count} groups transitioned to hill climbing",
-                    emoji="🔄"
-                )
-                
+                    
         except Exception as e:
-            self.log_message(f"⚠️ Error in _update_scout_phases: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error in _update_scout_phases: {e}")
 
     def _advance_scout_positions(self):
-        """Advance hill scout particle positions for the next iteration
+        """Adapt search radius based on scout performance
         
-        This method updates hill scout positions based on their current phase:
-        - Radial sampling: Increment radius and generate new angular coverage positions
-        - Hill climbing: Perform gradient-based position updates
+        This method is called after evaluation results have been distributed.
+        It adapts the search radius for each group based on whether scouts improved:
+        - If improved: expand radius (up to initial radius)
+        - If not improved: shrink radius (down to minimum)
         
-        This should be called after batch evaluation and phase updates, before the
-        next iteration's evaluation.
-        
-        Performance optimization: Uses vectorized operations where possible and
-        comprehensive error handling for robustness with large numbers of groups.
+        The adaptive radius strategy balances exploration and exploitation.
         """
         if not self.scout_config['enable_scouts']:
             return
         
         try:
-            # Performance optimization: Process groups by phase for better cache locality
-            radial_sampling_groups = []
-            hill_climbing_groups = []
+            # Get parameters
+            initial_radius_pct = self.scout_config['initial_search_radius_percentage']
+            shrink_factor = self.scout_config['radius_shrink_factor']
+            min_radius_pct = self.scout_config['min_search_radius_percentage']
             
+            # Calculate parameter ranges
+            if self.bounds is not None:
+                lower_bounds, upper_bounds = self.bounds
+                parameter_ranges = upper_bounds - lower_bounds
+            else:
+                parameter_ranges = np.ones(self.dimensions)
+            
+            # Calculate absolute radius values
+            initial_radius = initial_radius_pct * parameter_ranges
+            min_radius = min_radius_pct * parameter_ranges
+            
+            # Process each scout group
             for group_id, group in self.active_scout_groups.items():
-                if group['phase'] == 'radial_sampling':
-                    radial_sampling_groups.append((group_id, group))
-                elif group['phase'] == 'hill_climbing':
-                    hill_climbing_groups.append((group_id, group))
-
-            # Process hill climbing groups
-            step_size = self._calculate_hill_climbing_step_size()
-            
-            for group_id, group in hill_climbing_groups:
                 try:
                     scout_ids = group['scout_ids']
                     
-                    # Perform gradient-based position updates for each hill scout
+                    # Initialize search radius if not exists
+                    if 'search_radius' not in group:
+                        group['search_radius'] = initial_radius.copy()
+                    
+                    # Check if any scout in group improved
+                    group_improved = False
                     for scout_id in scout_ids:
-                        if scout_id not in self.scout_particles:
-                            continue
-                        
-                        try:
+                        if scout_id in self.scout_particles:
                             scout = self.scout_particles[scout_id]
-                            current_position = scout['position']
-                            
-                            # Simple gradient descent step
-                            # Generate random perturbation for exploration
-                            perturbation = np.random.randn(self.dimensions)
-                            perturbation_norm = np.linalg.norm(perturbation)
-                            
-                            if perturbation_norm > 0:
-                                perturbation = perturbation / perturbation_norm  # Normalize
-                                
-                                # Move in direction of perturbation
-                                new_position = current_position + step_size * perturbation
-                                
-                                # Ensure new position is within bounds
-                                if self.bounds is not None:
-                                    lower_bounds, upper_bounds = self.bounds
-                                    new_position = np.clip(new_position, lower_bounds, upper_bounds)
-                                
-                                # Update position for next evaluation
-                                scout['position'] = new_position
-                            
-                        except Exception as e:
-                            self.log_message(
-                                f"⚠️ Error advancing hill scout {scout_id}: {e}",
-                                emoji="⚠️"
-                            )
-                            
+                            if scout.get('improved_this_iteration', False):
+                                group_improved = True
+                                break
+                    
+                    # Adapt radius based on performance
+                    if group_improved:
+                        # Improvement found - expand radius (but cap at initial)
+                        new_radius = group['search_radius'] / shrink_factor
+                        group['search_radius'] = np.minimum(new_radius, initial_radius)
+                        
+                        # # Reset scout lifecycle when improvement is found
+                        # # Disabled for now
+                        # old_remaining = group['remaining_iterations']
+                        # group['remaining_iterations'] = self.scout_config['scout_lifetime']
+                        
+                        # # Log lifecycle reset
+                        # self.log_message(
+                        #     f"🔄 Scout group {group_id} lifecycle reset: {old_remaining} → {group['remaining_iterations']} iterations (improvement found)",
+                        #     emoji="🔄"
+                        # )
+                    else:
+                        # No improvement - shrink radius (but floor at minimum)
+                        new_radius = group['search_radius'] * shrink_factor
+                        group['search_radius'] = np.maximum(new_radius, min_radius)
+                    
                 except Exception as e:
                     self.log_message(
-                        f"⚠️ Error advancing hill climbing group {group_id}: {e}",
+                        f"⚠️ Error adapting radius for group {group_id}: {e}",
                         emoji="⚠️"
                     )
                     
         except Exception as e:
-            self.log_message(f"⚠️ Error in _advance_scout_positions: {e}", emoji="⚠️")
-
-    def _calculate_hill_climbing_step_size(self):
-        """Calculate step size for hill climbing based on parameter ranges
-        
-        Returns
-        -------
-        float
-            Step size for hill climbing
-        """
-        if self.bounds is None:
-            return 0.01  # Default step size
-        
-        lower_bounds, upper_bounds = self.bounds
-        parameter_ranges = upper_bounds - lower_bounds
-        avg_range = np.mean(parameter_ranges)
-        
-        # Use 1% of average parameter range as step size
-        return 0.01 * avg_range
+            self.log_message(f"⚠️ Error in _advance_scout_positions: {e}")
 
     def _update_scout_lifetimes(self):
-        """Update hill scout group lifetimes by decrementing iteration counters
+        """Update scout group lifetimes by decrementing iteration counters
         
-        This method decrements the remaining iterations for all active hill scout groups
-        that are in the hill_climbing phase. Groups in radial_sampling phase do not have
-        their lifetimes decremented until they transition to hill_climbing phase.
-        
+        This method decrements the remaining iterations for all active scout groups,
+        EXCEPT for groups whose spawn_point matches the current global best position.
         This method should be called once per iteration after phase updates.
-        
-        Requirements: 5.2 - WHEN each iteration completes, THE PSO_System SHALL decrement 
-        the remaining iterations for all active Hill_Scout_Groups
         """
         if not self.scout_config['enable_scouts']:
             return
+        
+        # Get current global best position
+        current_global_best_pos = self.swarm.best_pos if hasattr(self.swarm, 'best_pos') else None
         
         # Get list of group IDs to avoid modification during iteration
         group_ids = list(self.active_scout_groups.keys())
@@ -5008,16 +5108,52 @@ class GlobalBestPSO(SwarmOptimizer):
             
             group = self.active_scout_groups[group_id]
             
-            # Only decrement lifetime for groups in hill_climbing phase
-            # Groups in radial_sampling phase don't consume lifetime
-            if group['phase'] == 'hill_climbing':
-                if group['remaining_iterations'] > 0:
-                    group['remaining_iterations'] -= 1
+            # Skip lifetime decrement if this group's spawn point matches the current global best
+            if current_global_best_pos is not None:
+                spawn_point = group.get('spawn_point')
+                if spawn_point is not None and np.allclose(spawn_point, current_global_best_pos, rtol=1e-9, atol=1e-12):
+                    continue  # This group is immortal (spawned at current global best)
+            
+            # Decrement lifetime for all other groups
+            if group['remaining_iterations'] > 0:
+                group['remaining_iterations'] -= 1
+        
+        # Show remaining lifetime of all scout groups after each iteration
+        if len(self.active_scout_groups) > 0:
+            self._log_scout_group_lifetimes()
+
+    def _log_scout_group_lifetimes(self):
+        """Log the remaining lifetime of all active scout groups"""
+        if not self.scout_config['enable_scouts'] or len(self.active_scout_groups) == 0:
+            return
+        
+        try:
+            # Get current global best position for comparison
+            current_global_best_pos = self.swarm.best_pos if hasattr(self.swarm, 'best_pos') else None
+            
+            self.log_message("⏱️ Scout group lifetimes:")
+            for group_id, group in self.active_scout_groups.items():
+                remaining = group.get('remaining_iterations', 0)
+                
+                # Check if this group is immortal (spawn point matches global best)
+                is_immortal = False
+                if current_global_best_pos is not None:
+                    spawn_point = group.get('spawn_point')
+                    if spawn_point is not None and np.allclose(spawn_point, current_global_best_pos, rtol=1e-9, atol=1e-12):
+                        is_immortal = True
+                
+                if is_immortal:
+                    self.log_message(f"   {group_id}: {remaining} iterations (♾️ immortal - at global best)")
+                else:
+                    self.log_message(f"   {group_id}: {remaining} iterations remaining")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error logging scout group lifetimes: {e}")
 
     def _terminate_expired_groups(self, iteration):
-        """Terminate hill scout groups that have reached zero remaining iterations
+        """Terminate scout groups that have reached zero remaining iterations
         
-        This method checks all active hill scout groups and terminates those that have
+        This method checks all active scout groups and terminates those that have
         exhausted their lifetime (remaining_iterations <= 0). Termination includes cleanup
         of all associated resources and logging of termination events.
         
@@ -5025,9 +5161,6 @@ class GlobalBestPSO(SwarmOptimizer):
         ----------
         iteration : int
             Current iteration number for logging purposes
-            
-        Requirements: 5.3 - WHEN a Hill_Scout_Group reaches zero remaining iterations, 
-        THE PSO_System SHALL terminate and remove the group
         """
         if not self.scout_config['enable_scouts']:
             return
@@ -5043,8 +5176,8 @@ class GlobalBestPSO(SwarmOptimizer):
             
             group = self.active_scout_groups[group_id]
             
-            # Check if group has expired (only groups in hill_climbing phase can expire)
-            if group['phase'] == 'hill_climbing' and group['remaining_iterations'] <= 0:
+            # Check if group has expired
+            if group['remaining_iterations'] <= 0:
                 expired_groups.append(group_id)
         
         # Terminate all expired groups
@@ -5052,22 +5185,21 @@ class GlobalBestPSO(SwarmOptimizer):
             self._terminate_scout_group(group_id, iteration)
 
     def _terminate_scout_group(self, group_id, iteration):
-        """Terminate a hill scout group and cleanup all associated resources
+        """Terminate a scout group and cleanup all associated resources
         
-        This method handles the complete termination of a hill scout group, including:
+        This method handles the complete termination of a scout group, including:
         - Logging termination event with statistics
-        - Removing all hill scout particles associated with the group
+        - Removing all scout particles associated with the group
         - Removing the group from active groups
+        - Removing from immortal set if applicable
         - Preserving all attributed improvements in the spawner particle's personal best
         
         Parameters
         ----------
         group_id : str
-            Unique identifier of the hill scout group to terminate
+            Unique identifier of the scout group to terminate
         iteration : int
             Current iteration number for logging purposes
-            
-        Requirements: 5.3, 5.4, 3.5 - Terminate group, cleanup resources, preserve improvements
         """
         if group_id not in self.active_scout_groups:
             return  # Group already terminated
@@ -5078,19 +5210,14 @@ class GlobalBestPSO(SwarmOptimizer):
             # Collect statistics before cleanup
             spawner_id = group['spawner_id']
             scout_ids = group['scout_ids']
-            phase = group['phase']
             best_fitness = group.get('best_fitness', np.inf)
             spawn_point = group['spawn_point']
             
             # Calculate how many iterations the group was active
-            if phase == 'hill_climbing':
-                lifetime = self.scout_config['scout_lifetime']
-                iterations_active = lifetime - group['remaining_iterations']
-            else:
-                # Group terminated during radial sampling (shouldn't normally happen)
-                iterations_active = 0
+            lifetime = self.scout_config['scout_lifetime']
+            iterations_active = lifetime - group['remaining_iterations']
             
-            # Cleanup hill scout particles associated with this group
+            # Cleanup scout particles associated with this group
             self._cleanup_scout_resources(group_id)
             
             # Remove group from active groups
@@ -5098,13 +5225,14 @@ class GlobalBestPSO(SwarmOptimizer):
             
             # Log termination event with statistics
             self.log_message(
-                f"⏹️ Hill scout group {group_id} terminated at iteration {iteration} "
-                f"(spawned by particle #{spawner_id}, phase: {phase}, "
+                f"⏹️ Scout group {group_id} terminated at iteration {iteration} "
+                f"(spawned by particle #{spawner_id}, "
                 f"active for {iterations_active} iterations, "
                 f"best fitness: {best_fitness:.6e}, "
                 f"{len(scout_ids)} scouts)",
                 emoji="⏹️"
             )
+
             
             # Note: All improvements have already been attributed to the spawner particle's
             # personal best during the optimization process via _attribute_improvement(),
@@ -5112,23 +5240,20 @@ class GlobalBestPSO(SwarmOptimizer):
             
         except Exception as e:
             self.log_message(
-                f"⚠️ Error terminating hill scout group {group_id}: {e}",
+                f"⚠️ Error terminating scout group {group_id}: {e}",
                 emoji="⚠️"
             )
 
     def _cleanup_scout_resources(self, group_id):
-        """Cleanup all resources associated with a hill scout group
+        """Cleanup all resources associated with a scout group
         
-        This method removes all hill scout particles associated with the specified group
+        This method removes all scout particles associated with the specified group
         from the scout_particles dictionary, freeing associated memory and data structures.
         
         Parameters
         ----------
         group_id : str
-            Unique identifier of the hill scout group whose resources should be cleaned up
-            
-        Requirements: 5.4 - WHEN terminating a Hill_Scout_Group, THE PSO_System SHALL 
-        free all associated memory and data structures
+            Unique identifier of the scout group whose resources should be cleaned up
         """
         if group_id not in self.active_scout_groups:
             return  # Group doesn't exist
@@ -5137,7 +5262,7 @@ class GlobalBestPSO(SwarmOptimizer):
             group = self.active_scout_groups[group_id]
             scout_ids = group['scout_ids']
             
-            # Remove all hill scout particles associated with this group
+            # Remove all scout particles associated with this group
             removed_count = 0
             for scout_id in scout_ids:
                 if scout_id in self.scout_particles:
@@ -5150,7 +5275,7 @@ class GlobalBestPSO(SwarmOptimizer):
             # Log cleanup if any particles were removed
             if removed_count > 0:
                 self.log_message(
-                    f"🧹 Cleaned up {removed_count} hill scout particles from group {group_id}",
+                    f"🧹 Cleaned up {removed_count} scout particles from group {group_id}",
                     emoji="🧹"
                 )
             
@@ -5197,14 +5322,14 @@ class GlobalBestPSO(SwarmOptimizer):
             # Log summary with emoji-rich formatting
             self.log_message("", emoji=None)  # Empty line for spacing
             self.log_message("=" * 80, emoji=None)
-            self.log_message("🏔️ SCOUT SUMMARY STATISTICS 🏔️", emoji="🏔️")
+            self.log_message("🏔️ SCOUT SUMMARY STATISTICS 🏔️")
             self.log_message("=" * 80, emoji=None)
-            self.log_message(f"🌱 Total spawning events: {total_spawning_events}", emoji="🌱")
-            self.log_message(f"🎯 Total attribution records: {total_attribution_records}", emoji="🎯")
+            self.log_message(f"🌱 Total spawning events: {total_spawning_events}")
+            self.log_message(f"🎯 Total attribution records: {total_attribution_records}")
             self.log_message(f"   ├─ Personal best updates: {personal_best_attributions}", emoji=None)
             self.log_message(f"   └─ Global best updates: {global_best_attributions}", emoji=None)
-            self.log_message(f"📊 Active groups at end: {active_groups}", emoji="📊")
-            self.log_message(f"🧗 Active scouts at end: {active_scouts}", emoji="🧗")
+            self.log_message(f"📊 Active groups at end: {active_groups}")
+            self.log_message(f"🧗 Active scouts at end: {active_scouts}")
             
             if best_scout_fitness < np.inf:
                 self.log_message(
@@ -5215,7 +5340,7 @@ class GlobalBestPSO(SwarmOptimizer):
             # Log spawning details if any spawning occurred
             if total_spawning_events > 0:
                 self.log_message("", emoji=None)  # Empty line
-                self.log_message("📋 Spawning Event Details:", emoji="📋")
+                self.log_message("📋 Spawning Event Details:")
                 
                 # Group spawning events by spawner particle
                 spawner_counts = {}
@@ -5232,7 +5357,7 @@ class GlobalBestPSO(SwarmOptimizer):
             # Log attribution details if any attributions occurred
             if total_attribution_records > 0:
                 self.log_message("", emoji=None)  # Empty line
-                self.log_message("🎯 Attribution Details:", emoji="🎯")
+                self.log_message("🎯 Attribution Details:")
                 
                 # Group attributions by spawner particle
                 spawner_attributions = {}
@@ -5271,4 +5396,4 @@ class GlobalBestPSO(SwarmOptimizer):
             self.log_message("=" * 80, emoji=None)
             
         except Exception as e:
-            self.log_message(f"⚠️ Error logging hill scout summary: {e}", emoji="⚠️")
+            self.log_message(f"⚠️ Error logging hill scout summary: {e}")

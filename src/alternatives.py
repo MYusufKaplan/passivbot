@@ -606,6 +606,17 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
         height=31,
         graphs_path="logs/graphs.log"
     )
+
+    # Configure 10n selection
+    optimizer.set_10n_selection_config(
+        enable=True,
+        multiplier=1000,      # 1000n candidates
+        interval=10,        # Every 10 iterations
+        quality_threshold_pct=100,
+        on_fresh_start=True,
+        on_checkpoint_resume=True
+    )
+
     # Add small random perturbations to initial positions
     perturbation_scale = 0.1
     for i in range(n_particles):
@@ -655,7 +666,7 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
             # Evaluate with progress bar (similar to CMA-ES)
             with Progress(
                 SpinnerColumn(spinner_name="dots12"),
-                TextColumn("🐝 [progress.description]{task.description}"),
+                TextColumn("[progress.description]{task.description}"),
                 BarColumn(bar_width=None),
                 "•",
                 TaskProgressColumn(text_format="[progress.percentage]{task.percentage:>5.1f}%", show_speed=True),
@@ -676,7 +687,7 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
                 bankrupt_count = 0
                 non_bankrupt_count = 0
                 
-                task = progress.add_task(f"🐝 PSO Evaluating particles | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}", total=len(swarm_positions))
+                task = progress.add_task(f"PSO Evaluating particles | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}", total=len(swarm_positions))
                 
                 # Collect results with their original indices to maintain position-fitness pairing
                 fitness_results = [None] * len(swarm_positions)  # Pre-allocate array

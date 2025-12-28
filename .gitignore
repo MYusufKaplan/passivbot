@@ -1,5 +1,6 @@
 ### Linux ###
 *~
+.kiro
 
 balance.csv
 *.pkl*
@@ -259,7 +260,20 @@ celerybeat.pid
 
 # Environments
 .env
-.venv
+# Ignore the whole venv
+.venv/
+
+# Re-include required directory chain
+!.venv/
+!.venv/lib/
+!.venv/lib/python3.12/
+!.venv/lib/python3.12/site-packages/
+!.venv/lib/python3.12/site-packages/pyswarms/
+!.venv/lib/python3.12/site-packages/pyswarms/single/
+
+# Re-include the exact file
+!.venv/lib/python3.12/site-packages/pyswarms/single/global_best.py
+
 env/
 venv/
 ENV/

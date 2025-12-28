@@ -1,0 +1,172 @@
+{
+  "dimensions": 20,
+  "n_samples": 942,
+  "sampling_adequacy": {
+    "adequacy_level": "moderate",
+    "confidence_score": 0.3,
+    "n_samples": 942,
+    "dimensions": 20,
+    "theoretical_min_samples": 1e+20,
+    "coverage_ratio": 0.9645696104106966,
+    "sample_density": 22158.270246286153,
+    "coverage_uniformity": 0.5818213862830428,
+    "warnings": [
+      "CAUTION: Moderate sampling, consider increasing for high-dimensional spaces"
+    ],
+    "recommendation": "For 20D space, recommend 5000+ samples"
+  },
+  "fitness_statistics": {
+    "min": 83442952.32060036,
+    "max": 109815838.05514756,
+    "mean": 106511526.32980831,
+    "median": 107265067.22870164,
+    "std": 3815209.081640211,
+    "q25": 104862089.56025581,
+    "q75": 109230404.49764395,
+    "range": 26372885.734547198,
+    "coefficient_of_variation": 0.035819682743317205
+  },
+  "ruggedness": {
+    "ruggedness_score": 0.9437476220221577,
+    "autocorrelation": [
+      0.09585682996132926,
+      0.07887804492847525,
+      0.04787383890564789,
+      0.032342339924744,
+      0.0330163403050224,
+      0.049199950544385564,
+      0.05659930127529189
+    ],
+    "distance_scales": [
+      94.11144630289978,
+      207.61626287181141,
+      288.66312341685807,
+      458.8958122145975,
+      701.4791602076173,
+      967.8254654630214,
+      1170.8399326401936
+    ],
+    "fitness_volatility": [
+      1.2268771911212246,
+      1.1067805110197588,
+      1.0633212362929072,
+      1.0338212879595343,
+      1.0210498223092468,
+      1.0053494861204126,
+      1.0055118717710303
+    ],
+    "extreme_sensitivity_ratio": 0.2163308589607635,
+    "max_sensitivity": 778822.6521924657,
+    "cliff_score": 0.0,
+    "interpretation": "high",
+    "warning": null
+  },
+  "modality": {
+    "n_local_optima": 24,
+    "n_basins": 1,
+    "local_optima_density": 0.025477707006369428,
+    "interpretation": "unimodal"
+  },
+  "gradients": {
+    "mean_gradient": 44133.400245007775,
+    "median_gradient": 20222.698412511592,
+    "std_gradient": 66670.0775224659,
+    "max_gradient": 778822.6521967383,
+    "gradient_variability": 1.5106490130455617,
+    "interpretation": "moderate"
+  },
+  "neutrality": {
+    "neutrality_ratio": 0.011872449014126454,
+    "n_neutral_points": 0,
+    "neutral_percentage": 0.0,
+    "interpretation": "low"
+  },
+  "parameter_sensitivity": {
+    "sensitivities": {
+      "long_entry_initial_ema_dist": 0.5883476507836,
+      "long_ema_span_1": 0.3687404324685704,
+      "long_ema_span_0": 0.25738523718492085,
+      "long_entry_grid_spacing_pct": 0.2070669581084045,
+      "long_unstuck_close_pct": 0.11141927525540264,
+      "long_entry_grid_spacing_weight": 0.1100268264439931,
+      "long_unstuck_loss_allowance_pct": 0.09595987616748586,
+      "long_entry_grid_double_down_factor": 0.08912674697117055,
+      "long_unstuck_ema_dist": 0.07949662932039107,
+      "long_entry_initial_qty_pct": 0.07691978877560696,
+      "long_entry_trailing_retracement_pct": 0.0747296250889446,
+      "long_close_grid_qty_pct": 0.07325810482331464,
+      "long_filter_rolling_window": 0.04879524353947701,
+      "long_entry_trailing_threshold_pct": 0.044915888718429546,
+      "long_close_grid_min_markup": 0.03519415645257221,
+      "long_unstuck_threshold": 0.027801194467740726,
+      "long_entry_trailing_grid_ratio": 0.02211122324818616,
+      "long_total_wallet_exposure_limit": 0.0025102691724485275,
+      "long_close_grid_markup_range": 0.0023877166752099654,
+      "long_filter_relative_volume_clip_pct": 0.0018282285184746598
+    },
+    "local_sensitivities": {
+      "long_entry_initial_ema_dist": 52748361.7168946,
+      "long_ema_span_1": 32601.255639396535,
+      "long_ema_span_0": 36177.44438902892,
+      "long_entry_grid_spacing_pct": 116762780.69494921,
+      "long_unstuck_close_pct": 58269205.5201052,
+      "long_entry_grid_spacing_weight": 563158.4358392358,
+      "long_unstuck_loss_allowance_pct": 129028066.11888231,
+      "long_entry_grid_double_down_factor": 2004896.7850100016,
+      "long_unstuck_ema_dist": 51355749.18165499,
+      "long_entry_initial_qty_pct": 409309606.720169,
+      "long_entry_trailing_retracement_pct": 65809743.49194053,
+      "long_close_grid_qty_pct": 6642727.748857928,
+      "long_filter_rolling_window": 38551.25577572915,
+      "long_entry_trailing_threshold_pct": 57116792.66392302,
+      "long_close_grid_min_markup": 218003060.964574,
+      "long_unstuck_threshold": 10093402.224062216,
+      "long_entry_trailing_grid_ratio": 6222652.696438121,
+      "long_total_wallet_exposure_limit": 559730.2212447013,
+      "long_close_grid_markup_range": 181736646.35635483,
+      "long_filter_relative_volume_clip_pct": 6759980.062298611
+    },
+    "most_sensitive": "long_entry_initial_ema_dist",
+    "least_sensitive": "long_filter_relative_volume_clip_pct",
+    "sensitivity_range": 0.5865194222651253,
+    "dangerous_parameters": [
+      "long_close_grid_min_markup",
+      "long_close_grid_markup_range"
+    ],
+    "warning": "Parameters with extreme local sensitivity: ['long_close_grid_min_markup', 'long_close_grid_markup_range']"
+  },
+  "critical_warnings": [
+    {
+      "severity": "HIGH",
+      "message": "Low confidence (30.0%) - results may be unreliable",
+      "action": "For 20D space, recommend 5000+ samples"
+    },
+    {
+      "severity": "MEDIUM",
+      "message": "Parameters with extreme local sensitivity: ['long_close_grid_min_markup', 'long_close_grid_markup_range']",
+      "action": "Use parameter-specific step sizes and careful bounds"
+    }
+  ],
+  "recommendations": [
+    {
+      "aspect": "ruggedness",
+      "finding": "Highly rugged landscape with many local optima",
+      "strategies": [
+        "Use multi-start optimization with diverse initial positions",
+        "Increase exploration (higher PSO inertia weight)",
+        "Consider simulated annealing or genetic algorithms",
+        "Use hill climbers to escape local optima"
+      ]
+    },
+    {
+      "aspect": "parameter_sensitivity",
+      "finding": "High sensitivity variation (most: long_entry_initial_ema_dist, least: long_filter_relative_volume_clip_pct)",
+      "strategies": [
+        "Use different step sizes per parameter",
+        "Focus search on sensitive parameters",
+        "Consider parameter-specific mutation rates",
+        "Use coordinate descent for sensitive parameters"
+      ]
+    }
+  ]
+}
