@@ -1,3 +1,0 @@
-# Running the bot live
-
-Coming soon...

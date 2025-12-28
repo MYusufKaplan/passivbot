@@ -228,6 +228,86 @@ def fetch_position_history_stats(start_date):
 
     return pnls, all_closed_positions, stats_summary
 
+def get_last_funding_payment(symbol):
+    """Fetch the last funding payment for a symbol"""
+    try:
+        # Use CCXT to fetch funding history
+        # Fetch recent funding history (last few entries)
+        funding_history = gate.fetch_funding_history(symbol, limit=1)
+        
+        if funding_history and len(funding_history) > 0:
+            # funding_history returns a list of funding payment records
+            last_payment = float(funding_history[0].get('amount', 0))
+            payment_color = "green" if last_payment >= 0 else "red"
+            payment_str = f"[{payment_color}]{last_payment:+.5f}[/{payment_color}]"
+            return payment_str
+        else:
+            return "N/A"
+            
+    except Exception as e:
+        # Log the actual error for debugging
+        console.log(f"[dim red]Funding history error for {symbol}: {e}[/]")
+        return "N/A"
+
+def get_funding_info(symbol, position):
+    """Fetch next funding rate and time remaining until funding"""
+    try:
+        # Fetch funding rate info
+        funding_rate_info = gate.fetch_funding_rate(symbol)
+        
+        # Get next funding time (in milliseconds)
+        next_funding_time = funding_rate_info.get('fundingTimestamp')
+        funding_rate = funding_rate_info.get('fundingRate', 0)
+        
+        if next_funding_time:
+            # Convert to datetime
+            next_funding_dt = datetime.fromtimestamp(next_funding_time / 1000)
+            now = datetime.now()
+            time_remaining = next_funding_dt - now
+            
+            # Format time remaining
+            total_seconds = int(time_remaining.total_seconds())
+            if total_seconds < 0:
+                time_str = "Calculating..."
+            else:
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                seconds = total_seconds % 60
+                time_str = f"{hours}h {minutes:02d}m {seconds:02d}s"
+            
+            # Calculate expected funding payment
+            # Negative funding rate = you receive money (payment is positive)
+            # Positive funding rate = you pay money (payment is negative)
+            # Expected payment = -1 * position_value * funding_rate
+            contracts = float(position.get('contracts', 0))
+            contract_size = float(position.get('contractSize', 1))
+            entry_price = float(position.get('entryPrice', 0))
+            position_value = contracts * contract_size * entry_price
+            expected_funding = -1 * position_value * funding_rate
+            
+            # Format funding rate as percentage
+            # Negative funding = you receive money (green, coin bag)
+            # Positive funding = you pay money (red, flying money)
+            funding_rate_pct = funding_rate * 100
+            if funding_rate < 0:
+                rate_color = "green"
+                emoji = "💰"
+            else:
+                rate_color = "red"
+                emoji = "💸"
+            
+            # Add expected funding in parentheses
+            # Expected funding is already flipped, so positive = receive, negative = pay
+            expected_color = "green" if expected_funding >= 0 else "red"
+            rate_str = f"{emoji} [{rate_color}]{funding_rate_pct:+.4f}%[/{rate_color}] ([{expected_color}]{expected_funding:+.5f}[/{expected_color}])"
+            
+            return rate_str, time_str
+        else:
+            return "N/A", "N/A"
+            
+    except Exception as e:
+        return "Err", "Err"
+
 def get_price_changes(symbol):
     intervals = [
         "5m",
@@ -467,6 +547,10 @@ def build_position_panel(visual_symbol, symbol, position, current_price, orders,
     sparkline, low_price, high_price = create_sparkline(sparkline_prices, width=30, execution_data=execution_data)
     price_changes = get_price_changes(symbol)
     
+    # Get funding rate info and last funding payment
+    funding_rate_str, funding_time_str = get_funding_info(symbol, position)
+    last_funding_payment = get_last_funding_payment(symbol)
+    
     # Determine sparkline color based on current price position within range
     sparkline_color = "green"
     if low_price != high_price:  # Avoid division by zero
@@ -489,7 +573,8 @@ def build_position_panel(visual_symbol, symbol, position, current_price, orders,
     info.add_row(f"[bold]📊 15m Chart:[/] [{sparkline_color}]{sparkline}[/{sparkline_color}] Low: {low_price:.5f} High: {high_price:.5f}")
     info.add_row(f"[bold]📈 Changes:[/] 5m:{price_changes.get('5m', 'N/A')} 15m:{price_changes.get('15m', 'N/A')} 1h:{price_changes.get('1h', 'N/A')} 1d:{price_changes.get('1d', 'N/A')}")
     info.add_row(f"[bold]🧮 Unrealized PnL:[/] [{pnl_color}]{unrealized_pnl:.5f} ({(unrealized_pnl * try_price):.5f}₺)[/{pnl_color}]")
-    info.add_row(f"[bold]✅ Realized PnL:[/] {realized_pnl:.5f} ({(realized_pnl * try_price):.5f}₺)")
+    realized_pnl_color = "green" if realized_pnl >= 0 else "red"
+    info.add_row(f"[bold]✅ Realized PnL:[/] [{realized_pnl_color}]{realized_pnl:.5f} ({(realized_pnl * try_price):.5f}₺)[/{realized_pnl_color}]")
     info.add_row(f"[bold]⚖️ Break-Even Price:[/] {break_even_price:.5f}" if break_even_price else "[bold]⚖️ Break-Even Price:[/] —")
 
     info_panel = Panel(info, title="📋 Position Info", expand=False)
@@ -499,8 +584,17 @@ def build_position_panel(visual_symbol, symbol, position, current_price, orders,
     timer_table.add_row(f"[bold]⏱️ Time in Trade:[/] {duration_str}")
     timer_panel = Panel(timer_table, title="⏱️ Trade Duration", expand=False)
 
-    # Combine info and timer panels side by side
-    info_timer_columns = Columns([info_panel, timer_panel], equal=True, expand=True)
+    # Funding Info Panel
+    funding_table = Table.grid(padding=0)
+    funding_table.add_row(f"[bold]Next Funding:[/] {funding_rate_str} in {funding_time_str}")
+    funding_table.add_row(f"[bold]Last Funding:[/] {last_funding_payment}")
+    funding_panel = Panel(funding_table, title="💸 Funding", expand=False)
+
+    # Stack timer and funding panels vertically on the right side
+    right_side_panels = Group(timer_panel, funding_panel)
+
+    # Combine info panel on left and stacked panels on right
+    info_timer_columns = Columns([info_panel, right_side_panels], equal=True, expand=True)
 
     # Create position group with progress bars and info
     position_content = Group(
