@@ -1,0 +1,2 @@
+# CMA-ME Optimizer Dependencies
+ribs[all]>=0.6.0  # pyribs quality-diversity library with all optional dependencies

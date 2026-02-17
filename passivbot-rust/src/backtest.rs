@@ -148,6 +148,7 @@ pub struct Backtest<'a> {
     rolling_volume_sum: RollingVolumeSum,
     volume_indices_buffer: Option<Vec<(f64, usize)>>,
     pub bankruptcy_timestamp: Option<usize>,
+    pub bankruptcy_reason: i32,  // 0=none, 1=financial, 2=drawdown, 3=no_positions, 4=stale_position
     // Individual position tracking for inactivity
     position_timestamps: HashMap<usize, Option<usize>>, // coin_idx -> Option<timestamp>
     insufficient_positions_since: Option<usize>, // timestamp when we first dropped below n_positions
@@ -189,6 +190,25 @@ impl<'a> Backtest<'a> {
 
         let n_timesteps = hlcvs.shape()[0];
         let n_coins = hlcvs.shape()[1];
+        
+        // Validate that exchange_params_list length matches n_coins
+        if exchange_params_list.len() != n_coins {
+            panic!(
+                "exchange_params_list length ({}) does not match number of coins in hlcvs ({})",
+                exchange_params_list.len(),
+                n_coins
+            );
+        }
+        
+        // Validate that backtest_params.coins length matches n_coins
+        if backtest_params.coins.len() != n_coins {
+            panic!(
+                "backtest_params.coins length ({}) does not match number of coins in hlcvs ({})",
+                backtest_params.coins.len(),
+                n_coins
+            );
+        }
+        
         let initial_emas = (0..n_coins)
             .map(|i| {
                 let close_price = hlcvs[[0, i, CLOSE]];
@@ -256,6 +276,7 @@ impl<'a> Backtest<'a> {
             },
             volume_indices_buffer: Some(vec![(0.0, 0); n_coins]), // Initialize here
             bankruptcy_timestamp: None,
+            bankruptcy_reason: 0,  // 0=none
             // Initialize position timestamps - all coins start with None (no position)
             position_timestamps: (0..n_coins).map(|i| (i, None)).collect(),
             insufficient_positions_since: None,
@@ -389,8 +410,19 @@ impl<'a> Backtest<'a> {
                     let max_hours_without_position = 24 * self.backtest_params.max_days_without_position;
                     
                     if hours_insufficient >= max_hours_without_position {
-                        println!("\x1b[33m💤 BANKRUPTCY (INACTIVITY - NO POSITIONS): Insufficient positions for {} hours at timestep {}/{} (have: {}, need: {}, max hours: {})\x1b[0m", 
-                                 hours_insufficient, k, self.hlcvs.shape()[0] - 1, current_position_count, required_positions, max_hours_without_position);
+                        // Collect current coins held
+                        let mut coins_held: Vec<String> = Vec::new();
+                        for &coin_idx in self.positions.long.keys() {
+                            coins_held.push(format!("{}(L)", self.backtest_params.coins[coin_idx]));
+                        }
+                        for &coin_idx in self.positions.short.keys() {
+                            coins_held.push(format!("{}(S)", self.backtest_params.coins[coin_idx]));
+                        }
+                        let coins_str = if coins_held.is_empty() { "none".to_string() } else { coins_held.join(", ") };
+                        
+                        println!("\x1b[33m💤 BANKRUPTCY (INACTIVITY - NO POSITIONS): Insufficient positions for {} hours at timestep {}/{} (have: {}, need: {}, max hours: {}, coins: {})\x1b[0m", 
+                                 hours_insufficient, k, self.hlcvs.shape()[0] - 1, current_position_count, required_positions, max_hours_without_position, coins_str);
+                        self.bankruptcy_reason = 3;  // no_positions
                         return true;
                     }
                 }
@@ -420,6 +452,7 @@ impl<'a> Backtest<'a> {
                     if hours_since_trade >= max_hours_stale {
                         println!("\x1b[35m🕰️  BANKRUPTCY (INACTIVITY - STALE POSITION): Stale long position on coin {} ({}) at timestep {}/{} for {} hours (max: {})\x1b[0m", 
                                  coin_idx, self.backtest_params.coins[coin_idx], k, self.hlcvs.shape()[0] - 1, hours_since_trade, max_hours_stale);
+                        self.bankruptcy_reason = 4;  // stale_position
                         return true;
                     }
                 }
@@ -682,6 +715,7 @@ impl<'a> Backtest<'a> {
             println!("\x1b[31m💸 BANKRUPTCY (FINANCIAL): Financial bankruptcy at timestep {}/{} (equity_usd: {:.2})\x1b[0m", 
                      k, self.hlcvs.shape()[0] - 1, equity_usd);
             self.bankruptcy_timestamp = Some(k);
+            self.bankruptcy_reason = 1;  // financial
             equity_usd = 0.0;
             equity_btc = 0.0;
         }
@@ -701,6 +735,7 @@ impl<'a> Backtest<'a> {
                 println!("\x1b[31m📉 BANKRUPTCY (DRAWDOWN): Max drawdown exceeded at timestep {}/{} (drawdown: {:.4}, max: {:.4}, equity: {:.2}, peak: {:.2})\x1b[0m", 
                          k, self.hlcvs.shape()[0] - 1, -self.current_drawdown, self.backtest_params.max_drawdown, equity_usd, self.peak_equity);
                 self.bankruptcy_timestamp = Some(k);
+                self.bankruptcy_reason = 2;  // drawdown
                 equity_usd = 0.0;
                 equity_btc = 0.0;
             }
@@ -1759,7 +1794,7 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
     }
 }
 
-fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timestamp: Option<usize>) -> Analysis {
+fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timestamp: Option<usize>, bankruptcy_reason: i32) -> Analysis {
 
     if fills.len() <= 1 {
         if bankruptcy_timestamp.is_none() {
@@ -1777,6 +1812,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
         }
         
         analysis.bankruptcy_timestamp = bankruptcy_timestamp;
+        analysis.bankruptcy_reason = bankruptcy_reason;
         return analysis;
     }
     // Calculate daily equities
@@ -2164,6 +2200,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
     analysis.rsquared = rsquared;
     analysis.time_in_market_percent = time_in_market_percent;
     analysis.bankruptcy_timestamp = bankruptcy_timestamp;
+    analysis.bankruptcy_reason = bankruptcy_reason;
 
     // Only log the truly impossible cases
     if analysis.drawdown_worst >= 1.0 && analysis.bankruptcy_timestamp.is_none() {
@@ -2181,68 +2218,8 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
     analysis
 }
 
-pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timestamp: Option<usize>) -> Analysis {
-    let mut analysis = analyze_backtest_basic(fills, equities, bankruptcy_timestamp);
-
-    if fills.len() <= 1 {
-        return analysis;
-    }
-
-    let n = equities.len();
-    let mut subset_analyses = Vec::with_capacity(10);
-    subset_analyses.push(analysis.clone());
-
-    for i in 1..10 {
-        // fraction of the data we want to keep:
-        //  i=1 => fraction = 0.5       => last half
-        //  i=2 => fraction = 0.3333    => last third
-        //  i=3 => fraction = 0.25      => last quarter
-        //  etc.
-        let fraction = 1.0 / (1.0 + i as f64);
-
-        // start index for slicing the 'last' fraction
-        let start_idx = (n as f64 - fraction * (n as f64)).round() as usize;
-
-        // slice from start_idx to the end
-        let subset_equities = &equities[start_idx..];
-        if subset_equities.len() == 0 {
-            break;
-        }
-
-        // filter fills that happened after or at start_idx
-        let subset_fills: Vec<Fill> = fills
-            .iter()
-            .filter(|fill| fill.index >= start_idx)
-            .cloned()
-            .collect();
-        if subset_fills.len() == 0 {
-            break;
-        }
-
-        let subset_analysis = analyze_backtest_basic(&subset_fills, &subset_equities.to_vec(), bankruptcy_timestamp);
-        subset_analyses.push(subset_analysis);
-    }
-
-    // Compute weighted metrics as the mean of subset analyses
-    analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / 10.0;
-    analysis.gadg_w = subset_analyses.iter().map(|a| a.gadg).sum::<f64>() / 10.0;
-    analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / 10.0;
-    analysis.sharpe_ratio_w = subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / 10.0;
-    analysis.sortino_ratio_w = subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / 10.0;
-    analysis.omega_ratio_w = subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / 10.0;
-    analysis.calmar_ratio_w = subset_analyses.iter().map(|a| a.calmar_ratio).sum::<f64>() / 10.0;
-    analysis.sterling_ratio_w = subset_analyses
-        .iter()
-        .map(|a| a.sterling_ratio)
-        .sum::<f64>()
-        / 10.0;
-    analysis.loss_profit_ratio_w = subset_analyses
-        .iter()
-        .map(|a| a.loss_profit_ratio)
-        .sum::<f64>()
-        / 10.0;
-
-    analysis
+pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timestamp: Option<usize>, bankruptcy_reason: i32) -> Analysis {
+    analyze_backtest_basic(fills, equities, bankruptcy_timestamp, bankruptcy_reason)
 }
 
 /// Returns (Analysis in USD, Analysis in BTC).
@@ -2252,23 +2229,27 @@ pub fn analyze_backtest_pair(
     equities: &Equities,
     use_btc_collateral: bool,
     bankruptcy_timestamp: Option<usize>,
+    bankruptcy_reason: i32,
     max_days_without_position: f64,
     max_days_with_stale_position: f64,
 ) -> (Analysis, Analysis) {
-    let mut analysis_usd = analyze_backtest(fills, &equities.usd, bankruptcy_timestamp);
+    let mut analysis_usd = analyze_backtest(fills, &equities.usd, bankruptcy_timestamp, bankruptcy_reason);
     // Add the new metrics to the analysis
     analysis_usd.days_without_position = max_days_without_position;
     analysis_usd.days_with_stale_position = max_days_with_stale_position;
     
     if !use_btc_collateral {
+        // Skip BTC analysis entirely when not using BTC collateral
         return (analysis_usd.clone(), analysis_usd);
     }
+    
+    // Only do BTC analysis if actually using BTC collateral
     let mut btc_fills = fills.to_vec();
     for fill in btc_fills.iter_mut() {
         fill.balance_usd_total /= fill.btc_price; // Use actual BTC balance if available
         fill.pnl = fill.pnl / fill.btc_price; // Convert PNL to BTC
     }
-    let mut analysis_btc = analyze_backtest(&btc_fills, &equities.btc, bankruptcy_timestamp);
+    let mut analysis_btc = analyze_backtest(&btc_fills, &equities.btc, bankruptcy_timestamp, bankruptcy_reason);
     // Add the new metrics to the BTC analysis as well
     analysis_btc.days_without_position = max_days_without_position;
     analysis_btc.days_with_stale_position = max_days_with_stale_position;

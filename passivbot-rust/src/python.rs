@@ -81,6 +81,9 @@ pub fn run_backtest(
             n_timesteps
         )));
     }
+    
+    // Validate n_coins dimension
+    let n_coins = hlcvs_shape.1;
 
     // Prepare bot, exchange, and backtest parameters
     let bot_params_pair = bot_params_pair_from_dict(bot_params_pair_dict)?;
@@ -102,10 +105,30 @@ pub fn run_backtest(
                 "Unsupported data type for exchange_params_list",
             ));
         }
+        
+        // Validate exchange_params length matches n_coins
+        if params_vec.len() != n_coins {
+            return Err(PyValueError::new_err(format!(
+                "exchange_params_list length ({}) does not match number of coins in hlcvs ({})",
+                params_vec.len(),
+                n_coins
+            )));
+        }
+        
         params_vec
     };
 
     let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
+    
+    // Validate that backtest_params.coins length matches n_coins
+    if backtest_params.coins.len() != n_coins {
+        return Err(PyValueError::new_err(format!(
+            "backtest_params.coins length ({}) does not match number of coins in hlcvs ({})",
+            backtest_params.coins.len(),
+            n_coins
+        )));
+    }
+    
     let mut backtest = Backtest::new(
         &hlcvs_rust,
         &btc_usd_rust,
@@ -118,7 +141,7 @@ pub fn run_backtest(
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
         let (analysis_usd, analysis_btc) =
-            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral, backtest.bankruptcy_timestamp, backtest.max_days_without_position, backtest.max_days_with_stale_position);
+            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral, backtest.bankruptcy_timestamp, backtest.bankruptcy_reason, backtest.max_days_without_position, backtest.max_days_with_stale_position);
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;

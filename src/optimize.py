@@ -43,8 +43,9 @@ import logging
 import traceback
 import json
 import pprint
-from deap import base, creator, tools, algorithms
+from deap import base, creator, tools
 import alternatives
+from deap_optimizer.operators import mutPolynomialBoundedWrapper, cxSimulatedBinaryBoundedWrapper
 from contextlib import contextmanager
 import tempfile
 import time
@@ -120,7 +121,10 @@ def create_shared_memory_file(hlcvs):
 
         with open(shared_memory_file, "wb") as f:
             with tqdm(
-                total=total_size, unit="B", unit_scale=True, desc="Writing to shared memory"
+                total=total_size,
+                unit="B",
+                unit_scale=True,
+                desc="Writing to shared memory",
             ) as pbar:
                 for i in range(0, len(hlcvs_bytes), chunk_size):
                     chunk = hlcvs_bytes[i : i + chunk_size]
@@ -137,107 +141,17 @@ def create_shared_memory_file(hlcvs):
 def check_disk_space(path, required_space):
     total, used, free = shutil.disk_usage(path)
     logging.info(
-        f"Disk space - Total: {total/(1024**3):.2f} GB, Used: {used/(1024**3):.2f} GB, Free: {free/(1024**3):.2f} GB"
+        f"Disk space - Total: {total / (1024**3):.2f} GB, Used: {used / (1024**3):.2f} GB, Free: {free / (1024**3):.2f} GB"
     )
     if free < required_space:
         raise IOError(
-            f"Not enough disk space. Required: {required_space/(1024**3):.2f} GB, Available: {free/(1024**3):.2f} GB"
+            f"Not enough disk space. Required: {required_space / (1024**3):.2f} GB, Available: {free / (1024**3):.2f} GB"
         )
 
 
-def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb, param_bounds=None):
-    """
-    A wrapper around DEAP's mutPolynomialBounded function to pre-process
-    bounds and handle the case where lower and upper bounds may be equal.
-    Also handles discrete parameters like n_positions.
-
-    Args:
-        individual: Sequence individual to be mutated.
-        eta: Crowding degree of the mutation.
-        low: A value or sequence of values that is the lower bound of the search space.
-        up: A value or sequence of values that is the upper bound of the search space.
-        indpb: Independent probability for each attribute to be mutated.
-        param_bounds: Dictionary of parameter names to bounds for discrete handling.
-
-    Returns:
-        A tuple of one individual, mutated with consideration for equal lower and upper bounds.
-    """
-    # Convert low and up to numpy arrays for easier manipulation
-    low_array = np.array(low)
-    up_array = np.array(up)
-
-    # Identify dimensions where lower and upper bounds are equal
-    equal_bounds_mask = low_array == up_array
-
-    # Temporarily adjust bounds for those dimensions
-    # This adjustment is arbitrary and won't affect the outcome since the mutation
-    # won't be effective in these dimensions
-    temp_low = np.where(equal_bounds_mask, low_array - 1e-6, low_array)
-    temp_up = np.where(equal_bounds_mask, up_array + 1e-6, up_array)
-
-    # Call the original mutPolynomialBounded function with the temporarily adjusted bounds
-    tools.mutPolynomialBounded(individual, eta, list(temp_low), list(temp_up), indpb)
-
-    # Reset values in dimensions with originally equal bounds to ensure they remain unchanged
-    for i, equal in enumerate(equal_bounds_mask):
-        if equal:
-            individual[i] = low[i]
-
-    # Handle discrete parameters
-    if param_bounds:
-        param_names = list(param_bounds.keys())
-        for i, param_name in enumerate(param_names):
-            if param_name == "long_n_positions" and np.random.random() < indpb:
-                # For n_positions, use discrete choice instead of continuous mutation
-                low_val, high_val = param_bounds[param_name]
-                choices = list(range(int(low_val), int(high_val) + 1))
-                individual[i] = float(np.random.choice(choices))
-
-    return (individual,)
-
-
-def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
-    """
-    A wrapper around DEAP's cxSimulatedBinaryBounded function to pre-process
-    bounds and handle the case where lower and upper bounds may be equal.
-
-    Args:
-        ind1: The first individual participating in the crossover.
-        ind2: The second individual participating in the crossover.
-        eta: Crowding degree of the crossover.
-        low: A value or sequence of values that is the lower bound of the search space.
-        up: A value or sequence of values that is the upper bound of the search space.
-
-    Returns:
-        A tuple of two individuals after crossover operation.
-    """
-    # Convert low and up to numpy arrays for easier manipulation
-    low_array = np.array(low)
-    up_array = np.array(up)
-
-    # Identify dimensions where lower and upper bounds are equal
-    equal_bounds_mask = low_array == up_array
-
-    # Temporarily adjust bounds for those dimensions to prevent division by zero
-    # This adjustment is arbitrary and won't affect the outcome since the crossover
-    # won't modify these dimensions
-    low_array[equal_bounds_mask] -= 1e-6
-    up_array[equal_bounds_mask] += 1e-6
-
-    # Call the original cxSimulatedBinaryBounded function with adjusted bounds
-    tools.cxSimulatedBinaryBounded(ind1, ind2, eta, list(low_array), list(up_array))
-
-    # Ensure that values in dimensions with originally equal bounds are reset
-    # to the bound value (since they should not be modified)
-    for i, equal in enumerate(equal_bounds_mask):
-        if equal:
-            ind1[i] = low[i]
-            ind2[i] = low[i]
-
-    return ind1, ind2
-
-
-def individual_to_config(individual, optimizer_overrides, overrides_list, template=None):
+def individual_to_config(
+    individual, optimizer_overrides, overrides_list, template=None
+):
     if template is None:
         template = get_template_live_config("v7")
     keys_ignored = ["enforce_exposure_limit"]
@@ -280,7 +194,9 @@ def config_to_individual(config, param_bounds):
         ]
     # adjust to bounds
     bounds = [(low, high) for low, high in param_bounds.values()]
-    adjusted = [max(min(x, bounds[z][1]), bounds[z][0]) for z, x in enumerate(individual)]
+    adjusted = [
+        max(min(x, bounds[z][1]), bounds[z][0]) for z, x in enumerate(individual)
+    ]
     return adjusted
 
 
@@ -340,18 +256,20 @@ class Evaluator:
                 self.hlcvs_shapes[exchange],
             )
             self.shared_hlcvs_np[exchange] = self.mmap_contexts[exchange].__enter__()
-            _, self.exchange_params[exchange], self.backtest_params[exchange] = prep_backtest_args(
-                config, self.msss[exchange], exchange
+            _, self.exchange_params[exchange], self.backtest_params[exchange] = (
+                prep_backtest_args(config, self.msss[exchange], exchange)
             )
             logging.info(f"mmap_context entered successfully for {exchange}.")
 
         self.config = config
+        
         logging.info("Evaluator initialization complete.")
         self.results_queue = results_queue
-        
-
 
     def evaluate(self, individual, overrides_list=[]):
+        """
+        Evaluate an individual strategy on the full dataset.
+        """
         config = individual_to_config(
             individual, optimizer_overrides, overrides_list, template=self.config
         )
@@ -364,23 +282,34 @@ class Evaluator:
                 exchange_params=self.exchange_params[exchange],
                 backtest_params=self.backtest_params[exchange],
             )
-            fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
-                self.shared_memory_files[exchange],
-                self.hlcvs_shapes[exchange],
-                self.hlcvs_dtypes[exchange].str,
-                self.btc_usd_shared_memory_files[exchange],  # Pass BTC/USD shared memory file
-                self.btc_usd_dtypes[exchange].str,  # Pass BTC/USD dtype
-                bot_params,
-                self.exchange_params[exchange],
-                self.backtest_params[exchange],
+            fills, equities_usd, equities_btc, analysis_usd, analysis_btc = (
+                pbr.run_backtest(
+                    self.shared_memory_files[exchange],
+                    self.hlcvs_shapes[exchange],
+                    self.hlcvs_dtypes[exchange].str,
+                    self.btc_usd_shared_memory_files[
+                        exchange
+                    ],  # Pass BTC/USD shared memory file
+                    self.btc_usd_dtypes[exchange].str,  # Pass BTC/USD dtype
+                    bot_params,
+                    self.exchange_params[exchange],
+                    self.backtest_params[exchange],
+                )
             )
-            analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
+            analyses[exchange] = expand_analysis(
+                analysis_usd, analysis_btc, fills, config
+            )
             # Store equity length for bankruptcy inference
-            analyses[exchange]['equity_length'] = len(equities_usd)
+            analyses[exchange]["equity_length"] = len(equities_usd)
 
         analyses_combined = self.combine_analyses(analyses)
-        w_0, w_1, write_to_file = self.calc_fitness(analyses_combined, analyses, individual)
+        w_0, w_1, write_to_file = self.calc_fitness(
+            analyses_combined, analyses, individual
+        )
         analyses_combined.update({"w_0": w_0, "w_1": w_1})
+        
+        # Store last analysis for interval mode access
+        self.last_analyses_combined = analyses_combined
 
         if write_to_file:
             data = {
@@ -392,13 +321,13 @@ class Evaluator:
             }
             self.results_queue.put(data)
         return w_0, w_1, not write_to_file
-    
+
     def combine_analyses(self, analyses):
         analyses_combined = {}
         keys = analyses[next(iter(analyses))].keys()
         for key in keys:
             values = [analysis[key] for analysis in analyses.values()]
-            
+
             # Special handling for bankruptcy_timestamp - only set if actually bankrupt
             if key == "bankruptcy_timestamp":
                 # Find the first non-None bankruptcy timestamp (if any)
@@ -415,9 +344,30 @@ class Evaluator:
                     analyses_combined[f"{key}_min"] = None
                     analyses_combined[f"{key}_max"] = None
                     analyses_combined[f"{key}_std"] = None
-                    
 
-            elif not values or any([x == np.inf for x in values]) or any([x is None for x in values]):
+            # Special handling for bankruptcy_reason - use max to get most severe reason
+            # 0=none, 1=financial, 2=drawdown, 3=no_positions, 4=stale_position
+            elif key == "bankruptcy_reason":
+                non_zero_reasons = [v for v in values if v != 0]
+                if non_zero_reasons:
+                    # Use max to get the most severe bankruptcy reason
+                    max_reason = max(non_zero_reasons)
+                    analyses_combined[f"{key}_mean"] = max_reason
+                    analyses_combined[f"{key}_min"] = min(non_zero_reasons)
+                    analyses_combined[f"{key}_max"] = max_reason
+                    analyses_combined[f"{key}_std"] = 0.0
+                else:
+                    # No bankruptcy - all zeros
+                    analyses_combined[f"{key}_mean"] = 0
+                    analyses_combined[f"{key}_min"] = 0
+                    analyses_combined[f"{key}_max"] = 0
+                    analyses_combined[f"{key}_std"] = 0.0
+
+            elif (
+                not values
+                or any([x == np.inf for x in values])
+                or any([x is None for x in values])
+            ):
                 analyses_combined[f"{key}_mean"] = 0.0
                 analyses_combined[f"{key}_min"] = 0.0
                 analyses_combined[f"{key}_max"] = 0.0
@@ -436,8 +386,6 @@ class Evaluator:
                     raise
         return analyses_combined
 
-    
-    
     def calc_fitness(self, analyses_combined, analyses, individual, verbose=True):
         # Check for bankruptcy first - look for bankruptcy_timestamp in any of the analysis results
         keys = self.config["optimize"]["limits"]
@@ -449,82 +397,97 @@ class Evaluator:
             if key in analyses_combined and analyses_combined[key] is not None:
                 bankruptcy_timestamp = int(analyses_combined[key])
                 break
-        
+
         # Workaround: If bankruptcy_timestamp is None but we suspect bankruptcy occurred,
         # infer it from the equity series length
         if bankruptcy_timestamp is None:
             # Get actual number of timesteps from hlcvs_shapes
             first_exchange = next(iter(self.hlcvs_shapes))
-            n_timesteps = self.hlcvs_shapes[first_exchange][0]  # First dimension is timesteps
-            
+            n_timesteps = self.hlcvs_shapes[first_exchange][
+                0
+            ]  # First dimension is timesteps
+
             # Check if any exchange has significantly fewer equity data points than expected
             # This would indicate the backtest stopped early due to bankruptcy
             for exchange_name, analysis_data in analyses.items():
-                if 'equity_length' in analysis_data:
-                    equity_length = analysis_data['equity_length']
-                    if equity_length < (n_timesteps - 10):  # 10 timestep buffer as suggested
+                if "equity_length" in analysis_data:
+                    equity_length = analysis_data["equity_length"]
+                    if equity_length < (
+                        n_timesteps - 10
+                    ):  # 10 timestep buffer as suggested
                         # Infer bankruptcy timestamp from the equity length
                         bankruptcy_timestamp = equity_length
                         break
-        
+
         if bankruptcy_timestamp is not None:
             # Get actual number of timesteps from hlcvs_shapes
             # Use the first exchange's shape as they should all be the same
             first_exchange = next(iter(self.hlcvs_shapes))
-            n_timesteps = self.hlcvs_shapes[first_exchange][0]  # First dimension is timesteps
-            
+            n_timesteps = self.hlcvs_shapes[first_exchange][
+                0
+            ]  # First dimension is timesteps
+
             # Calculate penalty that heavily penalizes early bankruptcies
             # The earlier the bankruptcy, the higher the penalty
-            progress_ratio = bankruptcy_timestamp / n_timesteps  # 0.0 = immediate bankruptcy, 1.0 = end
-            
+            progress_ratio = (
+                bankruptcy_timestamp / n_timesteps
+            )  # 0.0 = immediate bankruptcy, 1.0 = end
+
             # Base penalty that scales exponentially with how early the bankruptcy occurred
             # Early bankruptcies (low progress_ratio) get much higher penalties
             base_penalty = 10 ** (len(keys) + 2)  # Large base penalty
-            
+
             # Exponential scaling: earlier bankruptcies get exponentially higher penalties
             # progress_ratio of 0.1 (10% through) gets ~10x higher penalty than 0.9 (90% through)
-            early_bankruptcy_multiplier = (1.0 - progress_ratio) + 0.1  # Ensures minimum multiplier of 0.1
-            
+            early_bankruptcy_multiplier = (
+                1.0 - progress_ratio
+            ) + 0.1  # Ensures minimum multiplier of 0.1
+
             penalty = base_penalty * early_bankruptcy_multiplier
-            
+
             # Skip logs and table for bankrupt strategies
             return penalty, penalty, False
-        
+
         # Check for high drawdown early to skip table generation
         prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
         drawdown = analyses_combined.get(f"{prefix}drawdown_worst_max", 0)
-        equity_diff = analyses_combined.get(f"{prefix}equity_balance_diff_neg_max_max", 0)
-        
+        equity_diff = analyses_combined.get(
+            f"{prefix}equity_balance_diff_neg_max_max", 0
+        )
+
         # Skip table and logs for high drawdown strategies (including no-trade strategies)
         if drawdown >= 1.0 or equity_diff >= 1.0:
-            penalty = 10**(len(keys) + 99)  # Large penalty for high drawdown
+            penalty = 10 ** (len(keys) + 99)  # Large penalty for high drawdown
             return penalty, penalty, False
-        
+
         # Debug: Log when we have a normal strategy that should show a table
         if verbose:
-            print(f"✅ NORMAL STRATEGY: drawdown={drawdown:.3f}, equity_diff={equity_diff:.3f} - showing table")
-        
+            print(
+                f"✅ NORMAL STRATEGY: drawdown={drawdown:.3f}, equity_diff={equity_diff:.3f} - showing table"
+            )
+
         # Check if we're in a cron environment or non-interactive shell
         import sys
+
         is_interactive = sys.stdout.isatty() and sys.stderr.isatty()
-        
+
         # Force colors even in non-interactive environments like cron
         console = Console(
-            force_terminal=True, 
-            no_color=False, 
-            log_path=False, 
+            force_terminal=True,
+            no_color=False,
+            log_path=False,
             width=159,
             color_system="truecolor",  # Force truecolor support
-            legacy_windows=False
+            legacy_windows=False,
         )
         modifier = 0.0
         # i = 5
 
         # Step 1: Initialize min/max values
-        min_contribution = float('inf')
-        max_contribution = float('-inf')
-        min_modifier = float('inf')
-        max_modifier = float('-inf')
+        min_contribution = float("inf")
+        max_contribution = float("-inf")
+        min_modifier = float("inf")
+        max_modifier = float("-inf")
 
         # Define color codes
         RESET = "\033[0m"
@@ -571,10 +534,10 @@ class Evaluator:
             "time_in_market_percent": "TiM %",
             "days_without_position": "Days w/o Pos",
             "days_with_stale_position": "Days Stale",
-            "expected_shortfall_1pct": "Expected Fall 1%"
+            "expected_shortfall_1pct": "Expected Fall 1%",
         }
         i = len(keys) + 1
-        
+
         # Step 2: Single pass to process and gather data
         for key in keys:
             keym = key.replace("lower_bound_", "").split("-")[0] + "_max"
@@ -589,24 +552,35 @@ class Evaluator:
 
             # Determine if we expect higher or lower values for the current key
             expect_higher_keys = (
-                "gain", "rsquared", "positions_held_per_day", "mdg",
-                "adg", "sharpe", "calmar", "omega", "sortino", "sterling","time_in_market_percent"
+                "gain",
+                "rsquared",
+                "positions_held_per_day",
+                "mdg",
+                "adg",
+                "sharpe",
+                "calmar",
+                "omega",
+                "sortino",
+                "sterling",
+                "time_in_market_percent",
             )
 
             expect_higher = any(key in keym for key in expect_higher_keys)
 
-
-            def normalize_delta(delta, current, target, expect_higher, reward_mode=False):
+            def normalize_delta(
+                delta, current, target, expect_higher, reward_mode=False
+            ):
                 eps = 1e-9
                 delta = current - target
 
                 if current < 0:
-                    return 10**(3)  # Treat invalid values as high penalty
+                    return 10 ** (3)  # Treat invalid values as high penalty
 
                 if reward_mode:
                     relative_delta = abs(current - target) / max(target, eps)
-                    return -1 * (relative_delta)  # More reward as current exceeds target
-                    
+                    return -1 * (
+                        relative_delta
+                    )  # More reward as current exceeds target
 
                 # Non-reward mode: bounded score between 0 and 1
                 if expect_higher:
@@ -622,21 +596,18 @@ class Evaluator:
                         norm = delta / max(current, eps)
                         return 0.9 * min(norm, 1.0) + 0.1
 
-
             # def normalize_delta(delta, current, target, expect_higher,reward_mode=False):
             #     eps = 1e-9
-                
+
             #     if current < 0:
             #         return 1.0
             #     if reward_mode:
             #         return -1 * (abs(delta) / max(target, eps))
-                
+
             #     if expect_higher:
             #         return max(0, (target - current)/max(target, eps)) # Normalized [0,1]
             #     else:
             #         return max(0, (current - target)/max(current, eps))  # Normalized [0,1]
-
-
 
             # Calculate normalized error based on delta and target
             # contribution = (10 ** i) * normalize_delta(delta,current,target,expect_higher)
@@ -649,7 +620,9 @@ class Evaluator:
             # elif contribution != 0:
             #     modifier = modifier * contribution
 
-            contribution = (10 ** 1) * normalize_delta(delta,current,target,expect_higher)
+            contribution = (10**1) * normalize_delta(
+                delta, current, target, expect_higher
+            )
             modifier = modifier + contribution
 
             # Update min/max for contribution and modifier
@@ -659,19 +632,22 @@ class Evaluator:
             max_modifier = max(max_modifier, modifier)
 
             # Store the result (we'll use this data for printing later)
-            results.append({
-                'key': header_aliases[myKey],
-                'target': target,
-                'current': current,
-                'delta': delta,
-                'contribution': contribution,
-                'modifier': modifier,
-                'expect_higher': expect_higher
-            })
+            results.append(
+                {
+                    "key": header_aliases[myKey],
+                    "target": target,
+                    "current": current,
+                    "delta": delta,
+                    "contribution": contribution,
+                    "modifier": modifier,
+                    "expect_higher": expect_higher,
+                }
+            )
 
         def log_modulus(x):
             x = np.asarray(x, dtype=np.float64)
             return np.sign(x) * np.log10(1 + np.abs(x))
+
         def rgb_to_hex(rgb):
             return "#{:02x}{:02x}{:02x}".format(*rgb)
 
@@ -695,12 +671,16 @@ class Evaluator:
             # Use rgb() format instead of hex for better cron compatibility
             return f"rgb({r},{g},{b})"
 
-        all_zero_contributions = all(r['contribution'] == 0.0 for r in results)
+        all_zero_contributions = all(r["contribution"] == 0.0 for r in results)
 
         i = len(keys) + 1
 
         # Step 4: Print the results with colorized values
-        table = Table(show_header=True, header_style="bold magenta", title="📊 Optimization Status")
+        table = Table(
+            show_header=True,
+            header_style="bold magenta",
+            title="📊 Optimization Status",
+        )
 
         table.add_column("Status", justify="center")
         table.add_column("Parameter", justify="center")
@@ -732,44 +712,54 @@ class Evaluator:
         #     "Sharpe":           4,
         #     "Sortino":          4,
         #     "Sterling":         4,
-        #     "TiM %":            2, 
+        #     "TiM %":            2,
         #     # "Hrs/Pos":          1,
         #     # "Pos/Day":          3,
         #     # "Unchg Max":        3,
         # }
         scaling_values = {
-            "DD Worst":         -99,
-            "DD 1%":            -99,
-            "Gain":             0,
-            "R²":               1,
-            "Days w/o Pos":     0,
-            "Days Stale":       0
+            "DD Worst": -99,
+            "DD 1%": -99,
+            "Gain": 0,
+            "R²": 1,
+            "Days w/o Pos": 0,
+            "Days Stale": 0,
         }
         for result in results:
-            key = result['key']
-            target = result['target']
-            current = result['current']
-            delta = result['delta']
-            expect_higher = result['expect_higher']
+            key = result["key"]
+            target = result["target"]
+            current = result["current"]
+            delta = result["delta"]
+            expect_higher = result["expect_higher"]
 
             if all_zero_contributions:
                 # target = ideal_targets[key]
                 # delta = current - target
 
                 try:
-                    contribution = 10**(scaling_values[key]) * normalize_delta(delta, current, target, expect_higher, reward_mode=all_zero_contributions)
+                    contribution = 10 ** (scaling_values[key]) * normalize_delta(
+                        delta,
+                        current,
+                        target,
+                        expect_higher,
+                        reward_mode=all_zero_contributions,
+                    )
                 except:
                     contribution = 0
                 # contribution = normalize_delta(delta, current, target, expect_higher, reward_mode=all_zero_contributions)
                 modifier += contribution
             else:
-                contribution = result['contribution']
-                modifier = result['modifier']
+                contribution = result["contribution"]
+                modifier = result["modifier"]
 
             # Determine status and color
-            if (delta >= 0 and expect_higher) or (all_zero_contributions and expect_higher):
+            if (delta >= 0 and expect_higher) or (
+                all_zero_contributions and expect_higher
+            ):
                 status = "✅ above target"
-            elif (delta <= 0 and not expect_higher) or (all_zero_contributions and not expect_higher):
+            elif (delta <= 0 and not expect_higher) or (
+                all_zero_contributions and not expect_higher
+            ):
                 status = "✅ below target"
             elif delta < 0 and expect_higher:
                 status = "❌ below target"
@@ -777,8 +767,10 @@ class Evaluator:
                 status = "❌ above target"
 
             status_color = (
-                rgb_to_hex(GREEN_RGB) if "✅" in status
-                else rgb_to_hex(RED_RGB) if "❌" in status
+                rgb_to_hex(GREEN_RGB)
+                if "✅" in status
+                else rgb_to_hex(RED_RGB)
+                if "❌" in status
                 else rgb_to_hex(CYAN)
             )
 
@@ -786,14 +778,20 @@ class Evaluator:
             keym_display = f"{key}"
 
             current_color = f"rgb({CYAN[0]},{CYAN[1]},{CYAN[2]})"
-            contribution_color = value_to_color(contribution, min_contribution, max_contribution)
+            contribution_color = value_to_color(
+                contribution, min_contribution, max_contribution
+            )
             modifier_color = value_to_color(modifier, min_modifier, max_modifier)
 
             # Create rich.Text objects
             status_text = Text(status, style=Style(color=status_color))
             current_text = Text(f"{current:>10.5f}", style=Style(color=current_color))
-            contribution_text = Text(f"{contribution:>12.5e}", style=Style(color=contribution_color))
-            modifier_text = Text(f"{modifier:>12.5e}", style=Style(color=modifier_color))
+            contribution_text = Text(
+                f"{contribution:>12.5e}", style=Style(color=contribution_color)
+            )
+            modifier_text = Text(
+                f"{modifier:>12.5e}", style=Style(color=modifier_color)
+            )
             # Add row
             table.add_row(
                 status_text,
@@ -804,20 +802,19 @@ class Evaluator:
                 contribution_text,
                 modifier_text,
                 f"{math.floor(individual[19])}",
-                f"{individual[20]:>10.5f}"
+                f"{individual[20]:>10.5f}",
             )
 
         # Display the table
         console.print(table)
         # console.print(f"Final Score: {(modifier) ** (1/(len(results)))}")
-        
-
-
 
         npos = individual[19]
 
         scoring_keys = self.config["optimize"]["scoring"]
-        assert len(scoring_keys) == 2, f"~❌ Expected 2 fitness scoring keys, got {len(scoring_keys)}"
+        assert len(scoring_keys) == 2, (
+            f"~❌ Expected 2 fitness scoring keys, got {len(scoring_keys)}"
+        )
 
         scores = []
         for sk in scoring_keys:
@@ -832,13 +829,10 @@ class Evaluator:
             scores.append(score_value)
 
             # if verbose:
-                # print(f"~🎯 [{skm}] Modifier: {modifier:.5e}, Value: {analyses_combined[skm]:.5f}, Score: {score_value:.5e}")
+            # print(f"~🎯 [{skm}] Modifier: {modifier:.5e}, Value: {analyses_combined[skm]:.5f}, Score: {score_value:.5e}")
 
         # Return scores after processing all scoring keys
         return scores[0], scores[1], True
-
-
-
 
     def __del__(self):
         if hasattr(self, "mmap_contexts"):
@@ -846,7 +840,6 @@ class Evaluator:
                 mmap_context.__exit__(None, None, None)
 
     def __getstate__(self):
-        # This method is called when pickling. We exclude mmap_contexts and shared_hlcvs_np
         state = self.__dict__.copy()
         del state["mmap_contexts"]
         del state["shared_hlcvs_np"]
@@ -934,7 +927,9 @@ def configs_to_individuals(cfgs, param_bounds):
             logging.error(f"error loading starting config: {e}")
     return list(inds.values())
 
+
 from types import SimpleNamespace
+
 
 async def initEvaluator(config_path: str = None, **kwargs):
     manage_rust_compilation()
@@ -990,12 +985,21 @@ async def initEvaluator(config_path: str = None, **kwargs):
     btc_usd_shared_memory_files = {}
     btc_usd_dtypes = {}
 
+    # Store timestamps for interval creation
+    timestamps_dict = {}
+
     config["backtest"]["coins"] = {}
     if config["backtest"]["combine_ohlcvs"]:
         exchange = "combined"
-        coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
-            config, exchange
-        )
+        (
+            coins,
+            hlcvs,
+            mss,
+            results_path,
+            cache_dir,
+            btc_usd_prices,
+            timestamps,  # NEW: Get timestamps
+        ) = await prepare_hlcvs_mss(config, exchange)
         exchange_preference = defaultdict(list)
         for coin in coins:
             exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -1006,6 +1010,7 @@ async def initEvaluator(config_path: str = None, **kwargs):
         hlcvs_shapes[exchange] = hlcvs.shape
         hlcvs_dtypes[exchange] = hlcvs.dtype
         msss[exchange] = mss
+        timestamps_dict[exchange] = timestamps  # Store timestamps for interval creation
         required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
         check_disk_space(tempfile.gettempdir(), required_space)
         logging.info(f"Starting to create shared memory file for {exchange}...")
@@ -1015,6 +1020,12 @@ async def initEvaluator(config_path: str = None, **kwargs):
         if config["backtest"].get("use_btc_collateral", False):
             # Use the fetched array
             btc_usd_data_dict[exchange] = btc_usd_prices
+            # Validate length matches hlcvs
+            if len(btc_usd_prices) != hlcvs.shape[0]:
+                logging.warning(
+                    f"{exchange} BTC/USD prices length ({len(btc_usd_prices)}) doesn't match hlcvs ({hlcvs.shape[0]}). Creating default array."
+                )
+                btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
         else:
             # Fall back to all ones
             btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
@@ -1023,18 +1034,23 @@ async def initEvaluator(config_path: str = None, **kwargs):
             btc_usd_data_dict[exchange]
         )
         btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
-        logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
+        logging.info(
+            f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
+        )
     else:
         tasks = {}
         for exchange in config["backtest"]["exchanges"]:
             tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
         for exchange in config["backtest"]["exchanges"]:
-            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = await tasks[
+                exchange
+            ]
             config["backtest"]["coins"][exchange] = coins
             hlcvs_dict[exchange] = hlcvs
             hlcvs_shapes[exchange] = hlcvs.shape
             hlcvs_dtypes[exchange] = hlcvs.dtype
             msss[exchange] = mss
+            timestamps_dict[exchange] = timestamps  # Store timestamps for interval creation
             required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
             check_disk_space(tempfile.gettempdir(), required_space)
             logging.info(f"Starting to create shared memory file for {exchange}...")
@@ -1044,6 +1060,12 @@ async def initEvaluator(config_path: str = None, **kwargs):
             # Create the BTC array for this exchange
             if config["backtest"].get("use_btc_collateral", False):
                 btc_usd_data_dict[exchange] = btc_usd_prices
+                # Validate length matches hlcvs
+                if len(btc_usd_prices) != hlcvs.shape[0]:
+                    logging.warning(
+                        f"{exchange} BTC/USD prices length ({len(btc_usd_prices)}) doesn't match hlcvs ({hlcvs.shape[0]}). Creating default array."
+                    )
+                    btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
             else:
                 btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
 
@@ -1056,7 +1078,9 @@ async def initEvaluator(config_path: str = None, **kwargs):
                 f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
             )
     exchanges = config["backtest"]["exchanges"]
-    exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
+    exchanges_fname = (
+        "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
+    )
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
@@ -1088,12 +1112,18 @@ async def initEvaluator(config_path: str = None, **kwargs):
     # Prepare BTC/USD data
     # For optimization, use the BTC/USD prices from the first exchange (or combined)
     # Since all exchanges should align in timesteps, this should be consistent
-    btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
+    btc_usd_data = (
+        btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
+    )
     if config["backtest"].get("use_btc_collateral", False):
         logging.info("Using fetched BTC/USD prices for collateral")
     else:
-        logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
-        btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
+        logging.info(
+            "Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False"
+        )
+        btc_usd_data = np.ones(
+            hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64
+        )
 
     validate_array(btc_usd_data, "btc_usd_data")
     btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
@@ -1103,7 +1133,6 @@ async def initEvaluator(config_path: str = None, **kwargs):
         shared_memory_files=shared_memory_files,
         hlcvs_shapes=hlcvs_shapes,
         hlcvs_dtypes=hlcvs_dtypes,
-        # Instead of a single file/dtype, pass dictionaries
         btc_usd_shared_memory_files=btc_usd_shared_memory_files,
         btc_usd_dtypes=btc_usd_dtypes,
         msss=msss,
@@ -1112,17 +1141,26 @@ async def initEvaluator(config_path: str = None, **kwargs):
     )
 
     logging.info(f"Finished initializing evaluator...")
-    
+
     # Ensure logs directory exists for best optimization status logging
     os.makedirs("logs", exist_ok=True)
-    
-    return evaluator, config
+
+    # Return evaluator, config, and additional data for interval creation
+    interval_data = {
+        "timestamps": timestamps_dict,
+        "hlcvs": hlcvs_dict,
+        "btc_usd_data": btc_usd_data_dict,
+    }
+
+    return evaluator, config, interval_data
 
 
 async def myMain(args):
-    evaluator , config = await initEvaluator(args.config_path)
+    evaluator, config, interval_data = await initEvaluator(args.config_path)
 
-    creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
+    creator.create(
+        "FitnessMulti", base.Fitness, weights=(-1.0, -1.0)
+    )  # Minimize both objectives
     creator.create("Individual", list, fitness=creator.FitnessMulti)
 
     toolbox = base.Toolbox()
@@ -1138,7 +1176,9 @@ async def myMain(args):
         if param_name == "long_n_positions":
             # Use discrete choice for n_positions to give equal probability to each integer
             choices = list(range(int(low), int(high) + 1))
-            toolbox.register(f"attr_{i}", lambda choices=choices: float(np.random.choice(choices)))
+            toolbox.register(
+                f"attr_{i}", lambda choices=choices: float(np.random.choice(choices))
+            )
         else:
             toolbox.register(f"attr_{i}", np.random.uniform, low, high)
 
@@ -1174,35 +1214,100 @@ async def myMain(args):
     toolbox.register("select", tools.selNSGA2)
 
     # Parallelization setup
-    logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
+    logging.info(
+        f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}"
+    )
     # pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
     # toolbox.register("map", pool.map)
     logging.info(f"Finished initializing multiprocessing pool.")
 
-    # Create initial population
-    logging.info(f"Creating initial population...")
+    # Create initial population using Latin Hypercube Sampling for better coverage
+    logging.info(f"Creating initial population with LHS...")
 
-    bounds = [(low, high) for low, high in param_bounds.values()]
+    bounds = [(low, high) for low, high in param_bounds.items()]
     starting_individuals = configs_to_individuals(
         get_starting_configs(args.starting_configs), param_bounds
     )
-    if (nstart := len(starting_individuals)) > (popsize := config["optimize"]["population_size"]):
+    
+    # Also try to load initial individual from optimize.json (like PSO does)
+    try:
+        from deap_optimizer.utils import create_seeded_individual_from_config
+        seeded_individual = create_seeded_individual_from_config(toolbox, args.config_path)
+        if seeded_individual is not None:
+            # Add seeded individual from optimize.json to starting individuals
+            starting_individuals.insert(0, list(seeded_individual))
+            logging.info(f"📋 Added seeded individual from {args.config_path}")
+    except Exception as e:
+        logging.warning(f"Could not create seeded individual from {args.config_path}: {e}")
+    
+    if (nstart := len(starting_individuals)) > (
+        popsize := config["optimize"]["population_size"]
+    ):
         logging.info(f"Number of starting configs greater than population size.")
         logging.info(f"Increasing population size: {popsize} -> {nstart}")
         config["optimize"]["population_size"] = nstart
 
-    population = toolbox.population(n=config["optimize"]["population_size"])
+    # Use LHS for initial population creation
+    pop_size = config["optimize"]["population_size"]
+    
+    # Separate variable and fixed parameters (LHS requires lower < upper)
+    param_names = list(param_bounds.keys())
+    variable_indices = []
+    fixed_indices = []
+    fixed_values = []
+    
+    for i, (name, (low, high)) in enumerate(param_bounds.items()):
+        if low < high:
+            variable_indices.append(i)
+        else:
+            fixed_indices.append(i)
+            fixed_values.append(low)  # Use the fixed value
+    
+    try:
+        from scipy.stats import qmc
+        
+        if variable_indices:
+            # LHS only for variable parameters
+            variable_lower = np.array([list(param_bounds.values())[i][0] for i in variable_indices])
+            variable_upper = np.array([list(param_bounds.values())[i][1] for i in variable_indices])
+            
+            sampler = qmc.LatinHypercube(d=len(variable_indices), seed=np.random.randint(0, 2**31))
+            unit_samples = sampler.random(n=pop_size)
+            variable_samples = qmc.scale(unit_samples, variable_lower, variable_upper)
+            
+            # Reconstruct full samples with fixed values
+            full_samples = np.zeros((pop_size, len(param_bounds)))
+            for j, var_idx in enumerate(variable_indices):
+                full_samples[:, var_idx] = variable_samples[:, j]
+            for j, fix_idx in enumerate(fixed_indices):
+                full_samples[:, fix_idx] = fixed_values[j]
+            
+            population = [creator.Individual(list(sample)) for sample in full_samples]
+            logging.info(f"Created {pop_size} individuals using LHS ({len(variable_indices)} variable, {len(fixed_indices)} fixed params)")
+        else:
+            # All parameters are fixed - just create identical individuals
+            fixed_individual = [list(param_bounds.values())[i][0] for i in range(len(param_bounds))]
+            population = [creator.Individual(list(fixed_individual)) for _ in range(pop_size)]
+            logging.info(f"All parameters fixed, created {pop_size} identical individuals")
+            
+    except ImportError:
+        logging.warning("scipy not available, falling back to random uniform sampling")
+        population = toolbox.population(n=pop_size)
+    
+    # Override with starting individuals if provided
     if starting_individuals:
-        bounds = [(low, high) for low, high in param_bounds.values()]
+        bounds_list = [(low, high) for low, high in param_bounds.values()]
         for i in range(len(starting_individuals)):
             adjusted = [
-                max(min(x, bounds[z][1]), bounds[z][0])
+                max(min(x, bounds_list[z][1]), bounds_list[z][0])
                 for z, x in enumerate(starting_individuals[i])
             ]
             population[i] = creator.Individual(adjusted)
 
         for i in range(len(starting_individuals), len(population) // 2):
-            mutant = deepcopy(population[np.random.choice(range(len(starting_individuals)))])
+            mutant = deepcopy(
+                population[np.random.choice(range(len(starting_individuals)))]
+            )
             toolbox.mutate(mutant)
             population[i] = mutant
 
@@ -1220,7 +1325,7 @@ async def myMain(args):
 
     hof = tools.ParetoFront()
 
-    # population = alternatives.cma(
+    # population = alternatives.pso(
     #     population,
     #     toolbox,
     #     evaluator=evaluator,
@@ -1228,45 +1333,54 @@ async def myMain(args):
     #     verbose=True,
     #     parameter_bounds=param_bounds
     # )
-    population = alternatives.pso(
-        population,
-        toolbox,
-        evaluator=evaluator,
-        ngen=max(1, int(config["optimize"]["iters"] / len(population))),
-        verbose=True,
-        parameter_bounds=param_bounds
-    )
+    
+    population, logbook = alternatives.deap_ea(
+            population=population,
+            toolbox=toolbox,
+            evaluator=evaluator,
+            ngen=max(1, int(config["optimize"]["iters"] / len(population))),
+            verbose=True,
+            parameter_bounds=param_bounds,
+            checkpoint_path="deap_checkpoint.pkl",
+            cxpb=config["optimize"]["crossover_probability"],
+            mutpb=config["optimize"]["mutation_probability"],
+            stagnation_config=config["optimize"].get("stagnation_detection", None),
+            config=config,
+            interval_data=interval_data
+        )
 
-    # final_population, logbook = alternatives.nevergrad_opt(
-    #     population=population,
-    #     toolbox=toolbox, 
-    #     evaluator=evaluator,
-    #     ngen=max(1, int(config["optimize"]["iters"] / len(population))),
-    #     verbose=True,
-    #     parameter_bounds=param_bounds,
-    #     optimizer_name="NGOpt"  # Can be "DE", "PSO", "CMA", etc.
-    # )
-
-    # population, logbook = algorithms.eaMuPlusLambda(
+    # population = alternatives.cma_es_restarts(
     #     population,
     #     toolbox,
     #     evaluator=evaluator,
-    #     mu=config["optimize"]["population_size"],
-    #     lambda_=config["optimize"]["population_size"],
-    #     cxpb=config["optimize"]["crossover_probability"],
-    #     mutpb=config["optimize"]["mutation_probability"],
-    #     ngen=max(1, int(config["optimize"]["iters"] / len(population))),
-    #     stats=stats,
-    #     halloffame=hof,
+    #     ngen=max(
+    #         1, int(config["optimize"]["iters"] / len(population))
+    #     ),  # Ignored - runs indefinitely
     #     verbose=True,
-    #     # parameter_bounds=param_bounds
+    #     parameter_bounds=param_bounds,
+    #     checkpoint_path=config["optimize"].get("checkpoint_path", "cma_checkpoint.pkl"),
+    #     population_size=config["optimize"].get("population_size", 1000),
+    #     sigma0=config["optimize"].get("sigma0", 0.01),
+    #     max_iter_per_restart=config["optimize"].get("max_iter_per_restart", 1000),
+    #     tol_hist_fun=config["optimize"].get("tol_hist_fun", 1e-12),
+    #     equal_fun_vals_k=config["optimize"].get("equal_fun_vals_k", None),
+    #     tol_x=config["optimize"].get("tol_x", 1e-11),
+    #     tol_up_sigma=config["optimize"].get("tol_up_sigma", 1e20),
+    #     stagnation_iter=config["optimize"].get("stagnation_iter", 100),
+    #     condition_cov=config["optimize"].get("condition_cov", 1e14),
+    #     min_sigma=config["optimize"].get("min_sigma", None),
     # )
+
 
 async def main():
     manage_rust_compilation()
     parser = argparse.ArgumentParser(prog="optimize", description="run optimizer")
     parser.add_argument(
-        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
+        "config_path",
+        type=str,
+        default=None,
+        nargs="?",
+        help="path to json passivbot config",
     )
     template_config = get_template_live_config("v7")
     del template_config["bot"]
@@ -1288,322 +1402,6 @@ async def main():
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
     await myMain(args)
-    if args.config_path is None:
-        logging.info(f"loading default template config configs/template.json")
-        config = load_config("configs/template.json", verbose=False)
-    else:
-        logging.info(f"loading config {args.config_path}")
-        config = load_config(args.config_path, verbose=False)
-    
-    old_config = deepcopy(config)
-    update_config_with_args(config, args)
-    config = format_config(config, verbose=False)
-    await add_all_eligible_coins_to_config(config)
-    try:
-        # Prepare data for each exchange
-        hlcvs_dict = {}
-        shared_memory_files = {}
-        hlcvs_shapes = {}
-        hlcvs_dtypes = {}
-        msss = {}
-
-        # NEW: Store per-exchange BTC arrays in a dict,
-        # and store their shared-memory file names in another dict.
-        btc_usd_data_dict = {}
-        btc_usd_shared_memory_files = {}
-        btc_usd_dtypes = {}
-
-        config["backtest"]["coins"] = {}
-        if config["backtest"]["combine_ohlcvs"]:
-            exchange = "combined"
-            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
-                config, exchange
-            )
-            exchange_preference = defaultdict(list)
-            for coin in coins:
-                exchange_preference[mss[coin]["exchange"]].append(coin)
-            for ex in exchange_preference:
-                logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
-            config["backtest"]["coins"][exchange] = coins
-            hlcvs_dict[exchange] = hlcvs
-            hlcvs_shapes[exchange] = hlcvs.shape
-            hlcvs_dtypes[exchange] = hlcvs.dtype
-            msss[exchange] = mss
-            required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
-            check_disk_space(tempfile.gettempdir(), required_space)
-            logging.info(f"Starting to create shared memory file for {exchange}...")
-            validate_array(hlcvs, "hlcvs")
-            shared_memory_file = create_shared_memory_file(hlcvs)
-            shared_memory_files[exchange] = shared_memory_file
-            if config["backtest"].get("use_btc_collateral", False):
-                # Use the fetched array
-                btc_usd_data_dict[exchange] = btc_usd_prices
-            else:
-                # Fall back to all ones
-                btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
-            validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
-            btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
-                btc_usd_data_dict[exchange]
-            )
-            btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
-            logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
-        else:
-            tasks = {}
-            for exchange in config["backtest"]["exchanges"]:
-                tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
-            for exchange in config["backtest"]["exchanges"]:
-                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
-                config["backtest"]["coins"][exchange] = coins
-                hlcvs_dict[exchange] = hlcvs
-                hlcvs_shapes[exchange] = hlcvs.shape
-                hlcvs_dtypes[exchange] = hlcvs.dtype
-                msss[exchange] = mss
-                required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
-                check_disk_space(tempfile.gettempdir(), required_space)
-                logging.info(f"Starting to create shared memory file for {exchange}...")
-                validate_array(hlcvs, "hlcvs")
-                shared_memory_file = create_shared_memory_file(hlcvs)
-                shared_memory_files[exchange] = shared_memory_file
-                # Create the BTC array for this exchange
-                if config["backtest"].get("use_btc_collateral", False):
-                    btc_usd_data_dict[exchange] = btc_usd_prices
-                else:
-                    btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
-
-                validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
-                btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
-                    btc_usd_data_dict[exchange]
-                )
-                btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
-                logging.info(
-                    f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
-                )
-        exchanges = config["backtest"]["exchanges"]
-        exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
-        date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-        coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
-        coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
-        hash_snippet = uuid4().hex[:8]
-        n_days = int(
-            round(
-                (
-                    date_to_ts(config["backtest"]["end_date"])
-                    - date_to_ts(config["backtest"]["start_date"])
-                )
-                / (1000 * 60 * 60 * 24)
-            )
-        )
-        config["results_filename"] = make_get_filepath(
-            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
-        )
-        overrides_list = config.get("optimize", {}).get("enable_overrides", [])
-
-        # Create results queue and start manager process
-        manager = multiprocessing.Manager()
-        results_queue = manager.Queue()
-        writer_process = Process(
-            target=results_writer_process,
-            args=(results_queue, config["results_filename"]),
-            kwargs={"compress": config["optimize"]["compress_results_file"]},
-        )
-        writer_process.start()
-
-        # Prepare BTC/USD data
-        # For optimization, use the BTC/USD prices from the first exchange (or combined)
-        # Since all exchanges should align in timesteps, this should be consistent
-        btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
-        if config["backtest"].get("use_btc_collateral", False):
-            logging.info("Using fetched BTC/USD prices for collateral")
-        else:
-            logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
-            btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
-
-        validate_array(btc_usd_data, "btc_usd_data")
-        btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
-
-        # Initialize evaluator with results queue and BTC/USD shared memory
-        evaluator = Evaluator(
-            shared_memory_files=shared_memory_files,
-            hlcvs_shapes=hlcvs_shapes,
-            hlcvs_dtypes=hlcvs_dtypes,
-            # Instead of a single file/dtype, pass dictionaries
-            btc_usd_shared_memory_files=btc_usd_shared_memory_files,
-            btc_usd_dtypes=btc_usd_dtypes,
-            msss=msss,
-            config=config,
-            results_queue=results_queue,
-        )
-
-        logging.info(f"Finished initializing evaluator...")
-        creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
-        creator.create("Individual", list, fitness=creator.FitnessMulti)
-
-        toolbox = base.Toolbox()
-
-        # Define parameter bounds
-        param_bounds = sort_dict_keys(config["optimize"]["bounds"])
-        for k, v in param_bounds.items():
-            if len(v) == 1:
-                param_bounds[k] = [v[0], v[0]]
-
-        # Register attribute generators
-        for i, (param_name, (low, high)) in enumerate(param_bounds.items()):
-            if param_name == "long_n_positions":
-                # Use discrete choice for n_positions to give equal probability to each integer
-                choices = list(range(int(low), int(high) + 1))
-                toolbox.register(f"attr_{i}", lambda choices=choices: float(np.random.choice(choices)))
-            else:
-                toolbox.register(f"attr_{i}", np.random.uniform, low, high)
-
-        def create_individual():
-            return creator.Individual(
-                [getattr(toolbox, f"attr_{i}")() for i in range(len(param_bounds))]
-            )
-        def create_individual_from_list(param_bounds_internal):
-            return creator.Individual(
-                [getattr(toolbox, f"attr_{i}")() for i in range(len(param_bounds_internal))]
-            )
-        toolbox.register("individual", create_individual)
-        toolbox.register("individual_from_list", create_individual_from_list)
-        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-
-        # Register the evaluation function
-        toolbox.register("evaluate", evaluator.evaluate, overrides_list=overrides_list)
-
-        # Register genetic operators
-        toolbox.register(
-            "mate",
-            cxSimulatedBinaryBoundedWrapper,
-            eta=20.0,
-            low=[low for low, high in param_bounds.values()],
-            up=[high for low, high in param_bounds.values()],
-        )
-        toolbox.register(
-            "mutate",
-            mutPolynomialBoundedWrapper,
-            eta=20.0,
-            low=[low for low, high in param_bounds.values()],
-            up=[high for low, high in param_bounds.values()],
-            indpb=1.0 / len(param_bounds),
-            param_bounds=param_bounds,
-        )
-        toolbox.register("select", tools.selNSGA2)
-
-        # Parallelization setup
-        logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
-        # pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
-        # toolbox.register("map", pool.map)
-        logging.info(f"Finished initializing multiprocessing pool.")
-
-        # Create initial population
-        logging.info(f"Creating initial population...")
-
-        bounds = [(low, high) for low, high in param_bounds.values()]
-        starting_individuals = configs_to_individuals(
-            get_starting_configs(args.starting_configs), param_bounds
-        )
-        if (nstart := len(starting_individuals)) > (popsize := config["optimize"]["population_size"]):
-            logging.info(f"Number of starting configs greater than population size.")
-            logging.info(f"Increasing population size: {popsize} -> {nstart}")
-            config["optimize"]["population_size"] = nstart
-
-        population = toolbox.population(n=config["optimize"]["population_size"])
-        if starting_individuals:
-            bounds = [(low, high) for low, high in param_bounds.values()]
-            for i in range(len(starting_individuals)):
-                adjusted = [
-                    max(min(x, bounds[z][1]), bounds[z][0])
-                    for z, x in enumerate(starting_individuals[i])
-                ]
-                population[i] = creator.Individual(adjusted)
-
-            for i in range(len(starting_individuals), len(population) // 2):
-                mutant = deepcopy(population[np.random.choice(range(len(starting_individuals)))])
-                toolbox.mutate(mutant)
-                population[i] = mutant
-
-        logging.info(f"Initial population size: {len(population)}")
-
-        # Set up statistics and hall of fame
-        stats = tools.Statistics(lambda ind: ind.fitness.values)
-        stats.register("avg", np.mean, axis=0)
-        stats.register("std", np.std, axis=0)
-        stats.register("min", np.min, axis=0)
-        stats.register("max", np.max, axis=0)
-
-        logbook = tools.Logbook()
-        logbook.header = "gen", "evals", "std", "min", "avg", "max"
-
-        hof = tools.ParetoFront()
-
-        # Run the optimization
-        logging.info(f"Starting optimize...")
-        evaluator = await initEvaluator(args.config_path)
-
-        population, logbook = algorithms.eaMuPlusLambda(
-            population,
-            toolbox,
-            evaluator=evaluator,
-            mu=config["optimize"]["population_size"],
-            lambda_=config["optimize"]["population_size"],
-            cxpb=config["optimize"]["crossover_probability"],
-            mutpb=config["optimize"]["mutation_probability"],
-            ngen=max(1, int(config["optimize"]["iters"] / len(population))),
-            stats=stats,
-            halloffame=hof,
-            verbose=True,
-            parameter_bounds=param_bounds
-        )
-
-        # Print statistics
-        print(logbook)
-
-        logging.info(f"Optimization complete.")
-
-        try:
-            logging.info(f"Extracting best config...")
-            result = subprocess.run(
-                ["python3", "src/tools/extract_best_config.py", config["results_filename"], "-v"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            print(result.stdout)
-        except Exception as e:
-            logging.error(f"failed to extract best config {e}")
-    except Exception as e:
-        logging.error(f"An error occurred: {e}")
-        traceback.print_exc()
-    finally:
-        # Signal the writer process to shut down and wait for it
-        if "results_queue" in locals():
-            results_queue.put("DONE")
-            writer_process.join()
-        if "pool" in locals():
-            logging.info("Closing and terminating the process pool...")
-            pool.close()
-            pool.terminate()
-            pool.join()
-
-        # Remove shared memory files (including BTC/USD)
-        if "shared_memory_files" in locals():
-            for shared_memory_file in shared_memory_files.values():
-                if shared_memory_file and os.path.exists(shared_memory_file):
-                    logging.info(f"Removing shared memory file: {shared_memory_file}")
-                    try:
-                        os.unlink(shared_memory_file)
-                    except Exception as e:
-                        logging.error(f"Error removing shared memory file: {e}")
-        if "btc_usd_shared_memory_file" in locals():
-            if btc_usd_shared_memory_file and os.path.exists(btc_usd_shared_memory_file):
-                logging.info(f"Removing BTC/USD shared memory file: {btc_usd_shared_memory_file}")
-                try:
-                    os.unlink(btc_usd_shared_memory_file)
-                except Exception as e:
-                    logging.error(f"Error removing BTC/USD shared memory file: {e}")
-
-        logging.info("Cleanup complete. Exiting.")
-        sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ gate = ccxt.gateio({
 })
 
 
-console = Console(force_terminal=True, no_color=False, color_system="truecolor", log_path=False, width=191)
+console = Console(force_terminal=True, no_color=False, color_system="truecolor", log_path=False, width=255)
 
 def hide_cursor():
     sys.stdout.write("\033[?25l")
@@ -607,6 +607,23 @@ def build_position_panel(visual_symbol, symbol, position, current_price, orders,
 
     return position_panel
 
+def get_bot_account_equity():
+    """Fetch the bot trading account balance (quant account) from Gate.io API"""
+    try:
+        # Use privateWalletGetTotalBalance to get all account balances
+        total_balance = gate.privateWalletGetTotalBalance()
+        
+        # Extract quant (bot trading) account balance
+        if 'details' in total_balance and 'quant' in total_balance['details']:
+            quant_balance = total_balance['details']['quant']
+            if quant_balance.get('currency') == 'USDT':
+                return float(quant_balance.get('amount', 0))
+        
+        return 0.0
+    except Exception as e:
+        console.log(f"[dim red]Could not fetch bot account equity: {e}[/]")
+        return 0.0
+
 def build_account_metrics_panel(balance, all_positions):
     try_price = fetch_usdt_try_price()
     
@@ -614,6 +631,7 @@ def build_account_metrics_panel(balance, all_positions):
     balance_usdt = 0.0
     free_usdt = 0.0
     used_usdt = 0.0
+    debt_usdt = 0.0
     
     # Check if we have the info array structure (Gate.io unified/swap accounts)
     if 'info' in balance and isinstance(balance['info'], list):
@@ -643,7 +661,9 @@ def build_account_metrics_panel(balance, all_positions):
         for pos in all_positions:
             total_unrealized_pnl += float(pos['unrealizedPnl'])
     
-    equity_usdt = (balance_usdt - debt_usdt + total_unrealized_pnl) 
+    # Get bot's account equity and add to total
+    bot_equity_usdt = get_bot_account_equity()
+    equity_usdt = (balance_usdt - debt_usdt + total_unrealized_pnl + bot_equity_usdt) 
     equity_try = equity_usdt * try_price
     profit_try = equity_try - 209000
 
@@ -654,9 +674,7 @@ def build_account_metrics_panel(balance, all_positions):
     balance_table.add_column(justify="left")
     
     balance_table.add_row(
-        f"[bold]💰 Total Equity:[/] {equity_usdt:.2f} USDT",
-        f"[bold]🔓 Free Balance:[/] {free_usdt:.2f} USDT",
-        f"[bold]📉 Used Margin:[/] {used_usdt:.2f} USDT",
+        f"[bold]💰 Total Equity:[/] {equity_usdt:.2f} USDT (Bot: {bot_equity_usdt:.2f})",
         f"[bold]💰 Equity TRY:[/] {equity_try:.2f}₺ (Profit: {profit_try:+.2f}₺)"
     )
     

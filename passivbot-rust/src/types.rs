@@ -281,6 +281,7 @@ pub struct Analysis {
     pub rsquared: f64,
     pub time_in_market_percent: f64,
     pub bankruptcy_timestamp: Option<usize>,
+    pub bankruptcy_reason: i32,  // 0=none, 1=financial, 2=drawdown, 3=no_positions, 4=stale_position
     pub days_without_position: f64,
     pub days_with_stale_position: f64,
 }
@@ -323,6 +324,7 @@ impl Default for Analysis {
             rsquared: 0.0,
             time_in_market_percent: 0.0,
             bankruptcy_timestamp: None,
+            bankruptcy_reason: 0,  // 0=none
             days_without_position: 0.0,
             days_with_stale_position: 0.0,
         }

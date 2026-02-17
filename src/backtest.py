@@ -19,6 +19,7 @@ from procedures import (
 from pure_funcs import (
     get_template_live_config,
     ts_to_date,
+    date_to_ts,
     sort_dict_keys,
     calc_hash,
 )
@@ -181,6 +182,12 @@ def load_coins_hlcvs_from_cache(config, exchange):
                 )
                 with gzip.open(btc_fname, "rb") as f:
                     btc_usd_prices = np.load(f)
+                # Validate length matches hlcvs
+                if len(btc_usd_prices) != hlcvs.shape[0]:
+                    logging.warning(
+                        f"{exchange} BTC/USD prices length ({len(btc_usd_prices)}) doesn't match hlcvs ({hlcvs.shape[0]}). Creating default array."
+                    )
+                    btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
             else:
                 # Backward compatibility: default to 1.0s if not cached
                 logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
@@ -195,6 +202,12 @@ def load_coins_hlcvs_from_cache(config, exchange):
                     f"{exchange} Attempting to load BTC/USD prices from cache {btc_fname}..."
                 )
                 btc_usd_prices = np.load(btc_fname)
+                # Validate length matches hlcvs
+                if len(btc_usd_prices) != hlcvs.shape[0]:
+                    logging.warning(
+                        f"{exchange} BTC/USD prices length ({len(btc_usd_prices)}) doesn't match hlcvs ({hlcvs.shape[0]}). Creating default array."
+                    )
+                    btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
             else:
                 # Backward compatibility: default to 1.0s if not cached
                 logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
@@ -259,7 +272,14 @@ async def prepare_hlcvs_mss(config, exchange):
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices = result
             logging.info(f"Successfully loaded hlcvs data from cache")
-            return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices
+            # Reconstruct timestamps from date range (1-minute intervals)
+            start_ts = date_to_ts(config["backtest"]["start_date"])
+            end_ts = date_to_ts(format_end_date(config["backtest"]["end_date"]))
+            timestamps = np.arange(start_ts, end_ts + 60000, 60000, dtype=np.int64)
+            # Ensure timestamps match hlcvs shape
+            if len(timestamps) != hlcvs.shape[0]:
+                timestamps = timestamps[:hlcvs.shape[0]]
+            return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     if exchange == "combined":
@@ -274,7 +294,7 @@ async def prepare_hlcvs_mss(config, exchange):
         logging.error(f"Failed to save hlcvs to cache: {e}")
         traceback.print_exc()
         cache_dir = ""
-    return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices
+    return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
 
 
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
@@ -455,7 +475,7 @@ async def main():
     config["backtest"]["coins"] = {}
     if config["backtest"]["combine_ohlcvs"]:
         exchange = "combined"
-        coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
+        coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = await prepare_hlcvs_mss(
             config, exchange
         )
         exchange_preference = defaultdict(list)
@@ -485,7 +505,7 @@ async def main():
         for exchange in config["backtest"]["exchanges"]:
             tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(configs[exchange], exchange))
         for exchange in tasks:
-            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = await tasks[exchange]
             configs[exchange]["backtest"]["coins"][exchange] = coins
             configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
             fills, equities, equities_btc, analysis = run_backtest(

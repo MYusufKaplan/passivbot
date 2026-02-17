@@ -164,7 +164,7 @@ async def run_de(bounds, evaluator):
 
 async def main():
     pb_config = "/home/myusuf/Projects/passivbot/configs/optimize.json"
-    evaluator = await initEvaluator(pb_config)
+    evaluator, config, interval_data = await initEvaluator(pb_config)
 
     console.print(Panel("🤖 [bold]Differential Evolution Optimizer[/bold] initialized", style="bold blue"))
     output_bounds = load_output_bounds(pb_config)

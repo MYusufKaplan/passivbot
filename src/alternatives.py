@@ -113,355 +113,6 @@ def evaluate_solution(args):
         with open(LOG_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
             return evaluator.evaluate(ind)
 
-def cma(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=None, checkpoint_path="cma_checkpoint.pkl"):
-    """
-    CMA-ES (Covariance Matrix Adaptation Evolution Strategy) implementation
-    
-    Args:
-        population: Initial population (ignored, CMA-ES determines its own size)
-        toolbox: DEAP toolbox with individual creation
-        evaluator: Evaluation function
-        ngen: Maximum number of generations
-        verbose: Whether to show detailed logging
-        parameter_bounds: Dictionary of parameter bounds
-        checkpoint_path: Path to save/load checkpoints
-    
-    Returns:
-        final_population: List of best individuals
-        logbook: Evolution statistics
-    """
-    start_time = time.time()
-    
-    if not parameter_bounds:
-        raise ValueError("parameter_bounds is required for CMA-ES")
-    
-    # Filter optimizable vs fixed parameters and identify integer parameters
-    optimizable_bounds = {}
-    fixed_params = {}
-    integer_params = set()
-    
-    for param_name, bounds in parameter_bounds.items():
-        min_val, max_val = bounds
-        if "short" not in param_name and min_val != max_val:  # Parameter has range to optimize
-            optimizable_bounds[param_name] = bounds
-            # Check if parameter should be integer
-            if any(keyword in param_name.lower() for keyword in ['n_positions']):
-                integer_params.add(param_name)
-        else:  # Fixed parameter
-            fixed_params[param_name] = min_val
-    
-    all_param_names = list(parameter_bounds.keys())
-    optimizable_param_names = list(optimizable_bounds.keys())
-    num_parameters = len(optimizable_param_names)
-    
-    log_message(f"🧬 CMA-ES: {num_parameters} optimizable parameters, {len(fixed_params)} fixed", emoji="🔬")
-    
-    # Load initial values from optimize.json
-    initial_values = {}
-    try:
-        with open("configs/optimize.json", "r") as f:
-            config = json.load(f)
-            long_config = config.get("bot", {}).get("long", {})
-            for param_name in optimizable_param_names:
-                clean_name = param_name.replace("long_", "")
-                if clean_name in long_config:
-                    value = long_config[clean_name]
-                    # Only use numeric values (ignore booleans like enforce_exposure_limit)
-                    if isinstance(value, (int, float)) and not isinstance(value, bool):
-                        initial_values[param_name] = float(value)
-        log_message(f"📋 Loaded {len(initial_values)} initial values from optimize.json", emoji="📋")
-    except Exception as e:
-        log_message(f"⚠️ Could not load optimize.json, using middle values: {e}", emoji="⚠️")
-    
-    # Create initial vector and bounds for CMA-ES
-    initial_vector = []
-    lower_bounds = []
-    upper_bounds = []
-    
-    for param_name in optimizable_param_names:
-        min_val, max_val = optimizable_bounds[param_name]
-        
-        # Use initial value from config if available, otherwise use middle value
-        if param_name in initial_values:
-            initial_val = initial_values[param_name]
-            if param_name in integer_params:
-                initial_val = round(initial_val)
-        else:
-            # Fallback to middle value
-            initial_val = (min_val + max_val) / 2
-            if param_name in integer_params:
-                initial_val = round(initial_val)
-        
-        initial_vector.append(initial_val)
-        lower_bounds.append(min_val)
-        upper_bounds.append(max_val)
-    
-    # Try loading from checkpoint
-    es = None
-    start_gen = 1
-    best_fitness = float('inf')
-    best_solution = None
-    logbook = []
-    
-    if os.path.exists(checkpoint_path):
-        log_message("📦 Loading CMA-ES checkpoint...", emoji="📦")
-        try:
-            with open(checkpoint_path, "rb") as f:
-                checkpoint_data = pickle.load(f)
-                
-                # Create bounds in the format cmaes expects: numpy array with shape (n_parameters, 2)
-                bounds_array = np.array([[lb, ub] for lb, ub in zip(lower_bounds, upper_bounds)])
-                
-                # Reconstruct CMA-ES from checkpoint
-                es = cmaes.CMA(
-                    mean=checkpoint_data["mean"],
-                    sigma=checkpoint_data["sigma"],
-                    bounds=bounds_array,
-                    population_size=checkpoint_data.get("population_size")
-                )
-                
-                start_gen = checkpoint_data["generation"] + 1
-                best_fitness = checkpoint_data["best_fitness"]
-                best_solution = checkpoint_data["best_solution"]
-                logbook = checkpoint_data.get("logbook", [])
-                
-            log_message(f"✅ Resumed from generation {start_gen-1}, best fitness: {best_fitness:.6e}", emoji="✅")
-        except Exception as e:
-            log_message(f"⚠️ Failed to load checkpoint: {e}, starting fresh", emoji="⚠️")
-            es = None
-    
-    # Initialize CMA-ES if not loaded from checkpoint
-    if es is None:
-        log_message("🚀 Starting fresh CMA-ES optimization", emoji="🚀")
-        
-        # Calculate initial sigma (step size) as 1/6 of the parameter ranges
-        sigma = np.mean([(ub - lb) / 6.0 for lb, ub in zip(lower_bounds, upper_bounds)])
-        
-        # Debug: Print bounds info
-        log_message(f"🔍 Initial vector: {initial_vector[:3]}... (showing first 3)", emoji="🔍")
-        log_message(f"🔍 Lower bounds: {lower_bounds[:3]}... (showing first 3)", emoji="🔍")
-        log_message(f"🔍 Upper bounds: {upper_bounds[:3]}... (showing first 3)", emoji="🔍")
-        log_message(f"🔍 Sigma: {sigma}", emoji="🔍")
-        
-        # Validate bounds - ensure initial vector is within bounds
-        for i, (init_val, lb, ub) in enumerate(zip(initial_vector, lower_bounds, upper_bounds)):
-            if not (lb <= init_val <= ub):
-                log_message(f"⚠️ Parameter {optimizable_param_names[i]}: initial {init_val} not in bounds [{lb}, {ub}]", emoji="⚠️")
-                # Clamp to bounds
-                initial_vector[i] = max(lb, min(ub, init_val))
-        
-        # Create bounds in the format cmaes expects: numpy array with shape (n_parameters, 2)
-        bounds_array = np.array([[lb, ub] for lb, ub in zip(lower_bounds, upper_bounds)])
-        
-        es = cmaes.CMA(
-            mean=np.array(initial_vector),
-            sigma=sigma,
-            bounds=bounds_array,
-            population_size=len(population)
-        )
-        
-        # Evaluate initial solution
-        log_message("🔍 Initial evaluation...", emoji="🔍")
-        initial_individual = create_full_individual(initial_vector, optimizable_param_names, all_param_names, fixed_params, integer_params, toolbox)
-        best_fitness = evaluator.evaluate(initial_individual)[0]
-        best_solution = initial_vector.copy()
-        
-        logbook.append({
-            "gen": 0,
-            "nevals": 1,
-            "best": best_fitness,
-            "mean": best_fitness,
-            "std": 0.0,
-            "time": 0.0
-        })
-    
-    log_message(f"🧬 Starting CMA-ES evolution from generation {start_gen}", emoji="🧬")
-    log_message(f"📊 Population size: {es.population_size}", emoji="📊")
-    
-    # Initialize tracking variables
-    generation_times = []
-    stagnation = 0
-    last_improvement_gen = 0
-    previous_best_fitness = best_fitness
-    
-    # Main CMA-ES Evolution Loop
-    for gen in range(start_gen, ngen + 1):
-        # Note: Removed es.should_stop() to allow aggressive optimization for lowest fitness
-        # CMA-ES will run for full ngen generations to find the absolute minimum
-            
-        gen_start_time = time.time()
-        console_wrapper(Rule(f"Generation {gen}", style="bold blue"))
-        
-        # Ask CMA-ES for new solutions
-        solutions = []
-        for _ in range(es.population_size):
-            solutions.append(es.ask())
-        
-        # Prepare evaluation arguments with solution index tracking
-        pool = Pool(processes=(cpu_count() - 1))
-        all_args = []
-        
-        for idx, solution in enumerate(solutions):
-            individual = create_full_individual(solution, optimizable_param_names, all_param_names, fixed_params, integer_params, toolbox)
-            # Include the solution index to maintain pairing
-            all_args.append((evaluator, individual, False, idx))
-        
-        # Evaluate with progress bar
-        fitnesses = []
-        with open(WATCH_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
-
-            with Progress(
-                SpinnerColumn(spinner_name="dots12"),
-                TextColumn("🧬 [progress.description]{task.description}"),
-                BarColumn(bar_width=None),
-                "•",
-                TaskProgressColumn(text_format="[progress.percentage]{task.percentage:>5.1f}%", show_speed=True),
-                "•",
-                TimeElapsedColumn(),
-                "•",
-                TimeRemainingColumn(),
-                "•",
-                console=console,
-                transient=True
-            ) as progress:
-                
-                task = progress.add_task(f"🧬 CMA-ES Gen {gen} | Best: {best_fitness:.6e}", total=es.population_size)
-                
-                # Collect results with their original indices to maintain solution-fitness pairing
-                fitness_results = [None] * es.population_size  # Pre-allocate array
-                current_best_gen = float('inf')
-                
-                for result in pool.imap_unordered(evaluate_solution, all_args):
-                    fitness_val, solution_idx = result[0], result[1]
-                    fitness_results[solution_idx] = fitness_val  # Place fitness at correct index
-                    
-                    # Track best in current generation
-                    if fitness_val < current_best_gen:
-                        current_best_gen = fitness_val
-                    
-                    # Update global best
-                    if fitness_val < best_fitness:
-                        improvement = best_fitness - fitness_val
-                        best_fitness = fitness_val
-                        # Use the correct solution corresponding to this fitness
-                        best_solution = solutions[solution_idx].copy()
-                        
-                        # Log new global best with celebration
-                        log_message(f"🎉 NEW GLOBAL BEST! 🎉 Fitness: {best_fitness:.6e} (improved by {improvement:.6e})", emoji="🌟")
-                    
-                    progress.update(
-                        task, 
-                        advance=1,
-                        description=f"🧬 CMA-ES Gen {gen} | Best: {best_fitness:.6e}"
-                    )
-                
-                # Convert to list for CMA-ES (fitness_results is now in correct order)
-                fitnesses = fitness_results
-            
-            pool.close()
-            pool.join()
-        
-        # Tell CMA-ES the results
-        es.tell([(sol, fit) for sol, fit in zip(solutions, fitnesses)])
-        
-        # Update stagnation tracking
-        if best_fitness < previous_best_fitness:
-            # Improvement found
-            stagnation = 0
-            last_improvement_gen = gen
-            previous_best_fitness = best_fitness
-        else:
-            # No improvement
-            stagnation += 1
-        
-        # Calculate statistics
-        gen_time = time.time() - gen_start_time
-        generation_times.append(gen_time)
-        avg_gen_time = sum(generation_times) / len(generation_times)
-        
-        mean_fitness = np.mean(fitnesses)
-        std_fitness = np.std(fitnesses)
-        
-        logbook.append({
-            "gen": gen,
-            "nevals": es.population_size,
-            "best": best_fitness,
-            "mean": mean_fitness,
-            "std": std_fitness,
-            "time": gen_time
-        })
-        
-        if verbose:
-            # Show parameter values for best solution in 2 columns
-            param_info = "\n🌐 Best Solution Parameters:"
-            param_lines = []
-            
-            for i, (param_name, value) in enumerate(zip(optimizable_param_names, best_solution)):
-                if param_name in integer_params:
-                    param_lines.append(f"📊 {param_name}: {int(round(value))}")
-                else:
-                    param_lines.append(f"📊 {param_name}: {value:.6f}")
-            
-            # Arrange in 2 columns
-            mid_point = (len(param_lines) + 1) // 2
-            left_column = param_lines[:mid_point]
-            right_column = param_lines[mid_point:]
-            
-            # Pad right column if needed
-            while len(right_column) < len(left_column):
-                right_column.append("")
-            
-            # Create 2-column layout
-            for left, right in zip(left_column, right_column):
-                if right:  # Both columns have content
-                    param_info += f"\n                  {left:<50} {right}"
-                else:  # Only left column has content
-                    param_info += f"\n                  {left}"
-            
-            # Stagnation status with emoji
-            stagnation_emoji = "🔥" if stagnation == 0 else "😴" if stagnation < 10 else "💤" if stagnation < 50 else "⚰️"
-            stagnation_info = f"🔄 Stagnation: {stagnation} gens {stagnation_emoji} (last improvement: gen {last_improvement_gen})"
-            
-            log_message(
-                f"""{CYAN}🌟 Gen {gen}{RESET}
-                🧬 Population size: {es.population_size}
-                🌍 Best fitness: {best_fitness:.6e}
-                📊 Mean fitness: {mean_fitness:.6e}
-                📈 Std fitness: {std_fitness:.6e}
-                {stagnation_info}
-                ⏱️ Generation time: {gen_time:.2f} sec / {(gen_time/60):.2f} min
-                📆 Avg gen time: {avg_gen_time:.2f} sec / {(avg_gen_time/60):.2f} min
-                🎯 Sigma: {es._sigma:.6f}{param_info}""",
-                panel=True, timestamp=False
-            )
-        
-        # Checkpoint saving every 5 generations
-        if gen % 1 == 0:
-            with open(checkpoint_path, "wb") as f:
-                pickle.dump({
-                    "mean": es.mean,
-                    "sigma": es._sigma,
-                    "population_size": es.population_size,
-                    "generation": gen,
-                    "best_fitness": best_fitness,
-                    "best_solution": best_solution,
-                    "logbook": logbook
-                }, f)
-            log_message(f"💾 Checkpoint saved at generation {gen}", emoji="💾")
-    
-    # Create final population for return
-    final_population = []
-    for i in range(len(population)):  # Match original population size
-        individual = create_full_individual(best_solution, optimizable_param_names, all_param_names, fixed_params, integer_params, toolbox)
-        individual.fitness.values = (best_fitness,)
-        final_population.append(individual)
-    
-    total_time = time.time() - start_time
-    log_message(f"🕒 Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)", emoji="🕒")
-    log_message(f"🏆 Final best fitness: {best_fitness:.6e}", emoji="🏆")
-    
-    return final_population, logbook
-
 def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=None, checkpoint_path="pso_checkpoint.pkl"):
     """
     Particle Swarm Optimization (PSO) implementation using enhanced PySwarms
@@ -609,7 +260,7 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
 
     # Configure 10n selection
     optimizer.set_10n_selection_config(
-        enable=True,
+        enable=False,
         multiplier=1000,      # 1000n candidates
         interval=10,        # Every 10 iterations
         quality_threshold_pct=100,
@@ -767,417 +418,6 @@ def pso(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=Non
     
     return final_population, logbook
 
-def nevergrad_opt(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=None, checkpoint_path="nevergrad_checkpoint.pkl", optimizer_name="NGOpt"):
-    """
-    Nevergrad optimization implementation using ngopt
-    
-    Args:
-        population: Initial population (used to determine budget)
-        toolbox: DEAP toolbox with individual creation
-        evaluator: Evaluation function
-        ngen: Maximum number of generations (converted to budget)
-        verbose: Whether to show detailed logging
-        parameter_bounds: Dictionary of parameter bounds
-        checkpoint_path: Path to save/load checkpoints
-        optimizer_name: Nevergrad optimizer to use (NGOpt, DE, PSO, CMA, etc.)
-    
-    Returns:
-        final_population: List of best individuals
-        logbook: Evolution statistics
-    """
-    if not NEVERGRAD_AVAILABLE:
-        raise ImportError("Nevergrad is required. Install with: pip install nevergrad")
-    
-    start_time = time.time()
-    
-    if not parameter_bounds:
-        raise ValueError("parameter_bounds is required for Nevergrad")
-    
-    # Filter optimizable vs fixed parameters and identify integer parameters
-    optimizable_bounds = {}
-    fixed_params = {}
-    integer_params = set()
-    
-    for param_name, bounds in parameter_bounds.items():
-        min_val, max_val = bounds
-        if "short" not in param_name and min_val != max_val:  # Parameter has range to optimize
-            optimizable_bounds[param_name] = bounds
-            # Check if parameter should be integer
-            if any(keyword in param_name.lower() for keyword in ['n_positions']):
-                integer_params.add(param_name)
-        else:  # Fixed parameter
-            fixed_params[param_name] = min_val
-    
-    all_param_names = list(parameter_bounds.keys())
-    optimizable_param_names = list(optimizable_bounds.keys())
-    num_parameters = len(optimizable_param_names)
-    
-    log_message(f"🎯 Nevergrad ({optimizer_name}): {num_parameters} optimizable parameters, {len(fixed_params)} fixed", emoji="🔬")
-    
-    # Load initial values from optimize.json
-    initial_values = {}
-    try:
-        with open("configs/optimize.json", "r") as f:
-            config = json.load(f)
-            long_config = config.get("bot", {}).get("long", {})
-            for param_name in optimizable_param_names:
-                clean_name = param_name.replace("long_", "")
-                if clean_name in long_config:
-                    value = long_config[clean_name]
-                    # Only use numeric values (ignore booleans like enforce_exposure_limit)
-                    if isinstance(value, (int, float)) and not isinstance(value, bool):
-                        initial_values[param_name] = float(value)
-        log_message(f"📋 Loaded {len(initial_values)} initial values from optimize.json", emoji="📋")
-    except Exception as e:
-        log_message(f"⚠️ Could not load optimize.json, using middle values: {e}", emoji="⚠️")
-    
-    # Create parameter space for Nevergrad
-    parametrization = {}
-    initial_vector = []
-    
-    for param_name in optimizable_param_names:
-        min_val, max_val = optimizable_bounds[param_name]
-        
-        # Use initial value from config if available, otherwise use middle value
-        if param_name in initial_values:
-            initial_val = initial_values[param_name]
-            if param_name in integer_params:
-                initial_val = round(initial_val)
-        else:
-            # Fallback to middle value
-            initial_val = (min_val + max_val) / 2
-            if param_name in integer_params:
-                initial_val = round(initial_val)
-        
-        initial_vector.append(initial_val)
-        
-        # Create appropriate parameter type
-        if param_name in integer_params:
-            parametrization[param_name] = ng.p.Scalar(lower=min_val, upper=max_val).set_integer_casting()
-        else:
-            parametrization[param_name] = ng.p.Scalar(lower=min_val, upper=max_val)
-    
-    # Create the instrumentation
-    instrum = ng.p.Instrumentation(**parametrization)
-    
-    # Calculate budget (total evaluations)
-    population_size = len(population)
-    budget = ngen * population_size
-    
-    log_message(f"🔍 Initial vector: {initial_vector[:3]}... (showing first 3)", emoji="🔍")
-    log_message(f"🔍 Budget: {budget} evaluations ({ngen} generations × {population_size} population)", emoji="🔍")
-    log_message(f"🔍 Optimizer: {optimizer_name}", emoji="🔍")
-    
-    # Create optimizer - fix numpy int issue by using numpy int conversion
-    try:
-        optimizer = ng.optimizers.registry[optimizer_name](parametrization=instrum, budget=np.int64(budget))
-        optimizer.enable_pickling()  # Enable picklability for checkpointing
-    except Exception as e:
-        log_message(f"⚠️ Error creating optimizer {optimizer_name}: {e}", emoji="⚠️")
-        log_message("🔄 Falling back to DE optimizer", emoji="🔄")
-        optimizer = ng.optimizers.registry["DE"](parametrization=instrum, budget=np.int64(budget))
-        optimizer.enable_pickling()  # Enable picklability for checkpointing
-        optimizer_name = "DE"
-    
-    # Try loading from checkpoint
-    start_eval = 0
-    best_fitness = float('inf')
-    best_solution = None
-    logbook = []
-    evaluation_history = []
-    
-    if os.path.exists(checkpoint_path):
-        log_message("📦 Loading Nevergrad checkpoint...", emoji="📦")
-        try:
-            with open(checkpoint_path, "rb") as f:
-                checkpoint_data = pickle.load(f)
-                
-                # Restore optimizer state
-                optimizer = checkpoint_data["optimizer"]
-                start_eval = checkpoint_data["num_evaluations"]
-                best_fitness = checkpoint_data["best_fitness"]
-                best_solution = checkpoint_data["best_solution"]
-                logbook = checkpoint_data.get("logbook", [])
-                evaluation_history = checkpoint_data.get("evaluation_history", [])
-                
-            log_message(f"✅ Resumed from evaluation {start_eval}, best fitness: {best_fitness:.6e}", emoji="✅")
-        except Exception as e:
-            log_message(f"⚠️ Failed to load checkpoint: {e}, starting fresh", emoji="⚠️")
-            start_eval = 0
-    
-    if start_eval == 0:
-        log_message("🚀 Starting fresh Nevergrad optimization", emoji="🚀")
-        
-        # Evaluate initial solution
-        log_message("🔍 Initial evaluation...", emoji="🔍")
-        initial_individual = create_full_individual(initial_vector, optimizable_param_names, all_param_names, fixed_params, integer_params, toolbox)
-        best_fitness = evaluator.evaluate(initial_individual)[0]
-        best_solution = initial_vector.copy()
-        
-        evaluation_history.append({
-            "eval": 0,
-            "fitness": best_fitness,
-            "solution": best_solution.copy()
-        })
-    
-    log_message(f"🎯 Starting Nevergrad optimization from evaluation {start_eval}", emoji="🎯")
-    
-    # Initialize tracking variables
-    generation_times = []
-    stagnation = 0
-    last_improvement_gen = 0
-    previous_best_fitness = best_fitness
-    evaluations_per_gen = population_size
-    
-    # Global variables for objective function
-    global ng_evaluator, ng_toolbox, ng_optimizable_param_names, ng_all_param_names, ng_fixed_params, ng_integer_params
-    
-    ng_evaluator = evaluator
-    ng_toolbox = toolbox
-    ng_optimizable_param_names = optimizable_param_names
-    ng_all_param_names = all_param_names
-    ng_fixed_params = fixed_params
-    ng_integer_params = integer_params
-    
-    def objective_function(gen):
-        """
-        Objective function for Nevergrad - evaluates entire generation
-        Args:
-            gen: Generation number
-        Returns:
-            gen_evaluations: List of fitness values for the generation
-        """
-        nonlocal best_fitness, best_solution, last_improvement_gen, evaluation_history
-        
-        # Ask for batch of candidates for this generation (mass ask for efficiency)
-        remaining_budget = budget - (gen - 1) * evaluations_per_gen
-        batch_size = min(evaluations_per_gen, remaining_budget)
-        
-            
-        # Use batch asking for better performance
-        try:
-            candidates = [optimizer.ask() for _ in range(batch_size)]
-        except Exception as e:
-            # Fallback to individual asks if batch asking fails
-            log_message(f"⚠️ Batch asking failed, falling back to individual asks: {e}", emoji="⚠️")
-            candidates = []
-            for i in range(batch_size):
-                candidates.append(optimizer.ask())
-        
-        # Prepare multiprocessing evaluation with candidate tracking
-        pool = Pool(processes=(cpu_count() - 1))
-        all_args = []
-        
-        for idx, candidate in enumerate(candidates):
-            # Extract parameter values from Nevergrad candidate
-            # For Instrumentation with named parameters, use candidate.value directly
-            try:
-                # Try accessing as dictionary (for Instrumentation)
-                solution_vector = [candidate.value[param_name] for param_name in ng_optimizable_param_names]
-            except (TypeError, KeyError):
-                # Fallback: try accessing as args/kwargs
-                try:
-                    candidate_args, candidate_kwargs = candidate.args, candidate.kwargs
-                    solution_vector = [candidate_kwargs[param_name] for param_name in ng_optimizable_param_names]
-                except:
-                    # Last resort: assume it's an array/tuple in parameter order
-                    solution_vector = list(candidate.value)
-            
-            individual = create_full_individual(solution_vector, ng_optimizable_param_names, 
-                                              ng_all_param_names, ng_fixed_params, 
-                                              ng_integer_params, ng_toolbox)
-            # Include the candidate index to maintain pairing
-            all_args.append((ng_evaluator, individual, False, idx))
-        
-        # Evaluate with progress bar
-        fitnesses = []
-        gen_evaluations = []
-        
-        with open(WATCH_PATH, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
-            
-            with Progress(
-                SpinnerColumn(spinner_name="dots12"),
-                TextColumn("🎯 [progress.description]{task.description}"),
-                BarColumn(bar_width=None),
-                "•",
-                TaskProgressColumn(text_format="[progress.percentage]{task.percentage:>5.1f}%", show_speed=True),
-                "•",
-                TimeElapsedColumn(),
-                "•",
-                TimeRemainingColumn(),
-                "•",
-                console=console,
-                transient=True
-            ) as progress:
-                
-                task = progress.add_task(f"🎯 Nevergrad Gen {gen} | Best: {best_fitness:.6e}", total=len(candidates))
-                
-                current_best_gen = float('inf')
-                for result_idx, result in enumerate(pool.imap_unordered(evaluate_solution, all_args)):
-                    fitness_val, candidate_idx = result[0], result[1]
-                    fitnesses.append(fitness_val)
-                    gen_evaluations.append(fitness_val)
-                    
-                    # Tell optimizer about the result - NOW WITH CORRECT CANDIDATE!
-                    optimizer.tell(candidates[candidate_idx], fitness_val)
-                    
-                    # Track evaluation
-                    # Extract parameter values from Nevergrad candidate - NOW WITH CORRECT CANDIDATE!
-                    try:
-                        # Try accessing as dictionary (for Instrumentation)
-                        solution_vector = [candidates[candidate_idx].value[param_name] for param_name in ng_optimizable_param_names]
-                    except (TypeError, KeyError):
-                        # Fallback: try accessing as args/kwargs
-                        try:
-                            candidate_args, candidate_kwargs = candidates[candidate_idx].args, candidates[candidate_idx].kwargs
-                            solution_vector = [candidate_kwargs[param_name] for param_name in ng_optimizable_param_names]
-                        except:
-                            # Last resort: assume it's an array/tuple in parameter order
-                            solution_vector = list(candidates[candidate_idx].value)
-                    eval_num = (gen - 1) * evaluations_per_gen + candidate_idx
-                    evaluation_history.append({
-                        "eval": eval_num,
-                        "fitness": fitness_val,
-                        "solution": solution_vector.copy()
-                    })
-                    
-                    # Track best in current generation
-                    if fitness_val < current_best_gen:
-                        current_best_gen = fitness_val
-                    
-                    # Update global best
-                    if fitness_val < best_fitness:
-                        improvement = best_fitness - fitness_val
-                        best_fitness = fitness_val
-                        best_solution = solution_vector.copy()
-                        last_improvement_gen = gen
-                        
-                        # Log new global best with celebration
-                        log_message(f"🎉 NEW GLOBAL BEST! 🎉 Fitness: {best_fitness:.6e} (improved by {improvement:.6e})", emoji="🌟")
-                    
-                    progress.update(
-                        task, 
-                        advance=1,
-                        description=f"🎯 Nevergrad Gen {gen} | Best: {best_fitness:.6e}"
-                    )
-            
-            pool.close()
-            pool.join()
-        
-        return gen_evaluations
-    
-    # Main Nevergrad optimization loop
-    for gen in range((start_eval // evaluations_per_gen) + 1, ngen + 1):
-        gen_start_time = time.time()
-        console_wrapper(Rule(f"Generation {gen}", style="bold green"))
-        
-        # Evaluate entire generation
-        gen_evaluations = objective_function(gen)
-        
-        # Update stagnation tracking
-        if best_fitness < previous_best_fitness:
-            stagnation = 0
-            previous_best_fitness = best_fitness
-        else:
-            stagnation += 1
-        
-        # Calculate statistics for this generation
-        gen_time = time.time() - gen_start_time
-        generation_times.append(gen_time)
-        avg_gen_time = sum(generation_times) / len(generation_times)
-        
-        mean_fitness = np.mean(gen_evaluations) if gen_evaluations else best_fitness
-        std_fitness = np.std(gen_evaluations) if len(gen_evaluations) > 1 else 0.0
-        
-        logbook.append({
-            "gen": gen,
-            "nevals": len(gen_evaluations),
-            "best": best_fitness,
-            "mean": mean_fitness,
-            "std": std_fitness,
-            "time": gen_time
-        })
-        
-        if verbose:
-            # Show parameter values for best solution in 2 columns
-            param_info = "\n🌐 Best Solution Parameters:"
-            param_lines = []
-            
-            for i, (param_name, value) in enumerate(zip(optimizable_param_names, best_solution)):
-                if param_name in integer_params:
-                    param_lines.append(f"📊 {param_name}: {int(round(value))}")
-                else:
-                    param_lines.append(f"📊 {param_name}: {value:.6f}")
-            
-            # Arrange in 2 columns
-            mid_point = (len(param_lines) + 1) // 2
-            left_column = param_lines[:mid_point]
-            right_column = param_lines[mid_point:]
-            
-            # Pad right column if needed
-            while len(right_column) < len(left_column):
-                right_column.append("")
-            
-            # Create 2-column layout
-            for left, right in zip(left_column, right_column):
-                if right:  # Both columns have content
-                    param_info += f"\n                  {left:<50} {right}"
-                else:  # Only left column has content
-                    param_info += f"\n                  {left}"
-            
-            # Stagnation status with emoji
-            stagnation_emoji = "🔥" if stagnation == 0 else "😴" if stagnation < 10 else "💤" if stagnation < 50 else "⚰️"
-            stagnation_info = f"🔄 Stagnation: {stagnation} gens {stagnation_emoji} (last improvement: gen {last_improvement_gen})"
-            
-            # Get the actual optimizer that NGOpt selected (if applicable)
-            actual_optimizer_name = optimizer_name
-            if optimizer_name == "NGOpt" and hasattr(optimizer, '_optim') and optimizer._optim is not None:
-                try:
-                    # NGOpt stores the selected optimizer in _optim
-                    actual_optimizer_name = optimizer._optim.name
-                except:
-                    # Fallback to original name if we can't determine the selected optimizer
-                    actual_optimizer_name = optimizer_name
-            
-            log_message(
-                f"""{CYAN}🌟 Gen {gen}{RESET}
-                🎯 Optimizer: {actual_optimizer_name}
-                🌍 Best fitness: {best_fitness:.6e}
-                📊 Mean fitness: {mean_fitness:.6e}
-                📈 Std fitness: {std_fitness:.6e}
-                {stagnation_info}
-                ⏱️ Generation time: {gen_time:.2f} sec / {(gen_time/60):.2f} min
-                📆 Avg gen time: {avg_gen_time:.2f} sec / {(avg_gen_time/60):.2f} min
-                🔢 Evaluations: {gen * evaluations_per_gen}/{budget}{param_info}""",
-                panel=True, timestamp=False
-            )
-        
-        # Checkpoint saving every generation
-        if gen % 1 == 0:
-            with open(checkpoint_path, "wb") as f:
-                pickle.dump({
-                    "optimizer": optimizer,
-                    "num_evaluations": gen * evaluations_per_gen,
-                    "best_fitness": best_fitness,
-                    "best_solution": best_solution,
-                    "logbook": logbook,
-                    "evaluation_history": evaluation_history
-                }, f)
-            log_message(f"💾 Checkpoint saved at generation {gen}", emoji="💾")
-    
-    # Create final population for return
-    final_population = []
-    for i in range(len(population)):  # Match original population size
-        individual = create_full_individual(best_solution, optimizable_param_names, all_param_names, fixed_params, integer_params, toolbox)
-        individual.fitness.values = (best_fitness,)
-        final_population.append(individual)
-    
-    total_time = time.time() - start_time
-    log_message(f"🕒 Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)", emoji="🕒")
-    log_message(f"🏆 Final best fitness: {best_fitness:.6e}", emoji="🏆")
-    
-    return final_population, logbook
-
 def create_full_individual(solution, optimizable_param_names, all_param_names, fixed_params, integer_params, toolbox):
     """Create a full individual from optimization solution vector"""
     individual = toolbox.individual()
@@ -1203,3 +443,166 @@ def create_full_individual(solution, optimizable_param_names, all_param_names, f
     
     individual[:] = full_solution
     return individual
+
+
+# CMA-ES with Restarts - lazy import to avoid circular dependency
+CMA_ES_AVAILABLE = False
+_cma_es_restarts = None
+
+def cma_es_restarts(*args, **kwargs):
+    """
+    Wrapper function for CMA-ES with automatic restarts.
+    Lazy-loads the actual implementation to avoid circular imports.
+    """
+    global _cma_es_restarts, CMA_ES_AVAILABLE
+    
+    if _cma_es_restarts is None:
+        try:
+            from cma_es import cma_es_restarts as _cma_impl
+            _cma_es_restarts = _cma_impl
+            CMA_ES_AVAILABLE = True
+        except ImportError as e:
+            raise ImportError(
+                f"CMA-ES with Restarts not available: {e}\n"
+                "Make sure src/cma_es exists and all dependencies are installed."
+            )
+    
+    return _cma_es_restarts(*args, **kwargs)
+
+
+def deap_ea(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds=None, checkpoint_path="deap_checkpoint.pkl", cxpb=0.5, mutpb=0.2, stagnation_config=None, config=None, interval_data=None):
+    """
+    DEAP Evolutionary Algorithm implementation using the reorganized DEAP module.
+    
+    This function provides the interface between optimize.py and the DEAP
+    evolutionary algorithm implementation, following the same pattern as PSO
+    and CMA-ES.
+    
+    Args:
+        population: Initial population (DEAP individuals)
+        toolbox: DEAP toolbox with genetic operators
+        evaluator: Evaluator instance for fitness evaluation
+        ngen: Maximum number of generations
+        verbose: Whether to show detailed logging
+        parameter_bounds: Dictionary of parameter bounds
+        checkpoint_path: Path to save/load checkpoints
+        cxpb: Crossover probability (default: 0.5)
+        mutpb: Mutation probability (default: 0.2)
+        stagnation_config: Dictionary with stagnation detection configuration (optional)
+        config: Configuration dictionary (optional, needed for interval evaluation)
+        interval_data: Dictionary with timestamps, hlcvs, btc_usd_data for interval creation (optional)
+    
+    Returns:
+        final_population: List of final individuals
+        logbook: Evolution statistics
+    
+    Requirements: 1.4, 6.1, 6.3, 6.5, 2.2, 2.3, 2.4, 8.1
+    """
+    from deap import tools
+    from deap_optimizer.evolutionary_algorithm import eaMuPlusLambda
+    from deap_optimizer.interval import split_into_monthly_intervals, cleanup_interval_files
+    from optimize import create_shared_memory_file
+    import numpy as np
+    
+    start_time = time.time()
+    
+    if not parameter_bounds:
+        raise ValueError("parameter_bounds is required for DEAP EA")
+    
+    n_individuals = len(population)
+    dimensions = len(parameter_bounds)
+    
+    log_message(f"🧬 DEAP EA: {dimensions} parameters, {n_individuals} individuals", emoji="🔬")
+    
+    # Set up statistics tracking
+    stats = tools.Statistics(lambda ind: ind.fitness.values)
+    stats.register("avg", np.mean, axis=0)
+    stats.register("std", np.std, axis=0)
+    stats.register("min", np.min, axis=0)
+    stats.register("max", np.max, axis=0)
+    
+    # Set up hall of fame
+    halloffame = tools.HallOfFame(1)
+    
+    # Initialize Rich console for logging (following PSO pattern)
+    deap_console = Console(
+        force_terminal=True,
+        no_color=False,
+        log_path=False,
+        width=191,
+        color_system="truecolor",
+        legacy_windows=False
+    )
+    
+    # Check if interval evaluation is configured
+    intervals = None
+    use_intervals = config and config.get("backtest", {}).get("use_monthly_intervals", False)
+    
+    if use_intervals and interval_data:
+        log_message("📅 Monthly interval evaluation enabled, creating intervals...", emoji="📅")
+        
+        # Get the first exchange's data (all exchanges should have aligned timestamps)
+        first_exchange = next(iter(interval_data["timestamps"]))
+        timestamps = interval_data["timestamps"][first_exchange]
+        
+        # Create intervals using the interval module
+        intervals = split_into_monthly_intervals(
+            start_date=config["backtest"]["start_date"],
+            end_date=config["backtest"]["end_date"],
+            timestamps=timestamps,
+            shared_hlcvs=interval_data["hlcvs"],
+            hlcvs_shapes={ex: arr.shape for ex, arr in interval_data["hlcvs"].items()},
+            btc_usd_data=interval_data["btc_usd_data"],
+            btc_usd_dtypes={ex: arr.dtype for ex, arr in interval_data["btc_usd_data"].items()},
+            create_shared_memory_fn=create_shared_memory_file,
+        )
+        
+        log_message(f"📅 Created {len(intervals)} monthly intervals", emoji="📅")
+    
+    # Run the simplified eaMuPlusLambda algorithm directly
+    # This follows the pattern where the algorithm is called directly
+    # rather than through a wrapper class
+    try:
+        final_population, logbook = eaMuPlusLambda(
+            population=population,
+            toolbox=toolbox,
+            mu=n_individuals,
+            lambda_=n_individuals,
+            cxpb=cxpb,  # Use passed crossover probability
+            mutpb=mutpb,  # Use passed mutation probability
+            ngen=ngen,
+            stats=stats,
+            halloffame=halloffame,
+            verbose=verbose,
+            checkpoint_path=checkpoint_path,
+            checkpoint_interval=1,
+            console=deap_console,
+            console_logging=True,
+            file_logging=True,
+            watch_path=WATCH_PATH,
+            evaluator=evaluator,
+            parameter_bounds=parameter_bounds,
+            stagnation_config=stagnation_config,
+            intervals=intervals
+        )
+        
+        # Get best individual from hall of fame
+        if halloffame:
+            best_individual = halloffame[0]
+            best_fitness = best_individual.fitness.values[0]
+            log_message(f"✨ DEAP EA complete! Best fitness: {best_fitness:.6e}", emoji="🎉")
+        
+        total_time = time.time() - start_time
+        log_message(f"🕒 Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)", emoji="🕒")
+        
+        return final_population, logbook
+        
+    except Exception as e:
+        log_message(f"❌ DEAP EA failed: {e}", emoji="❌")
+        raise
+    finally:
+        # Clean up interval files if they were created
+        if intervals:
+            log_message("🧹 Cleaning up interval shared memory files...", emoji="🧹")
+            cleanup_interval_files(intervals)
+            log_message("🧹 Interval cleanup complete", emoji="🧹")

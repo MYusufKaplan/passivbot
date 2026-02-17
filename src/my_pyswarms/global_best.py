@@ -56,19 +56,17 @@ R.C. Eberhart in Particle Swarm Optimization [IJCNN1995]_.
 """
 
 # Import standard library
-import logging
-import pickle
-import os
-import time
-import datetime
 import contextlib
+import datetime
 import itertools
+import logging
+import os
+import pickle
+import time
+from collections import deque
 
 # Import modules
 import numpy as np
-import multiprocessing as mp
-
-from collections import deque
 
 # Advanced initialization imports
 try:
@@ -80,10 +78,18 @@ except ImportError:
 # Rich imports for beautiful logging
 try:
     from rich.console import Console
-    from rich.text import Text
     from rich.panel import Panel
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TaskProgressColumn,
+        TextColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+    )
     from rich.rule import Rule
-    from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn, SpinnerColumn, TaskProgressColumn
+    from rich.text import Text
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
@@ -95,12 +101,14 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
-from .utils.operators import compute_pbest, compute_objective_function
-from .utils.topology_star import Star
-from .utils.handlers import BoundaryHandler, VelocityHandler, OptionsHandler
-from .utils.base_single import SwarmOptimizer
-from .utils.reporter import Reporter
 import subprocess
+
+from .utils.base_single import SwarmOptimizer
+from .utils.handlers import BoundaryHandler, OptionsHandler, VelocityHandler
+from .utils.operators import compute_objective_function, compute_pbest
+from .utils.reporter import Reporter
+from .utils.topology_star import Star
+
 
 def play_sound(path):
     subprocess.run(["aplay", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -349,11 +357,11 @@ class GlobalBestPSO(SwarmOptimizer):
         # Existing PySwarms code will work without any changes
         default_scout_config = {
             'scouts_per_spawn': 10,
-            'scout_lifetime': 10,
+            'scout_lifetime': 50,
             'adaptive_negative_fitness_threshold_enabled': False,
-            'negative_fitness_threshold': 1e3,
+            'negative_fitness_threshold': 0,
             'spawn_lhs_percentage': 0.01,  # LHS hypercube size as % of parameter ranges
-            'max_concurrent_groups': 50,
+            'max_concurrent_groups': 100,
             'enable_scouts': True,  # Disabled by default for backward compatibility
             # Local search parameters
             'local_search_neighbors': 10,  # Number of neighbors to generate per scout
@@ -430,7 +438,7 @@ class GlobalBestPSO(SwarmOptimizer):
         valid_params = {
             'scouts_per_spawn': (int, lambda x: x > 0, "must be a positive integer"),
             'scout_lifetime': (int, lambda x: x > 0, "must be a positive integer"),
-            'negative_fitness_threshold': ((int, float), lambda x: x > 0, "must be positive"),
+            'negative_fitness_threshold': ((int, float), lambda x: True, "can be any numeric value (positive, negative, or zero)"),
             'spawn_lhs_percentage': ((int, float), lambda x: 0.0 < x <= 1.0, "must be between 0.0 and 1.0"),
             'max_concurrent_groups': (int, lambda x: x > 0, "must be a positive integer"),
             'enable_scouts': (bool, lambda x: True, "must be a boolean"),
@@ -1370,61 +1378,87 @@ class GlobalBestPSO(SwarmOptimizer):
             best_grid_x = grid_width // 2
             best_grid_y = grid_height // 2
         
-        # Convert density to Rich colored characters (10 levels + empty + global best)
+        # Convert density to Rich colored characters with smooth gradient
         max_density = np.max(density_grid) if np.max(density_grid) > 0 else 1
         
-        # 10-level color gradient from cold (low density) to hot (high density)
-        # Using Rich color styling with single characters for perfect alignment
+        # Smooth color gradient from purple to red based on exact density values
+        # Using Rich's RGB color support for true gradient coloring
         from rich.text import Text
         
-        def get_colored_char(level):
-            if level == 0:
-                return Text("·", style="dim black")  # Empty
-            elif level == 1:
-                return Text("▪", style="blue")       # Coldest
-            elif level == 2:
-                return Text("▪", style="bright_blue")
-            elif level == 3:
-                return Text("▪", style="cyan")
-            elif level == 4:
-                return Text("▪", style="bright_cyan")
-            elif level == 5:
-                return Text("▪", style="green")
-            elif level == 6:
-                return Text("▪", style="bright_green")
-            elif level == 7:
-                return Text("▪", style="yellow")
-            elif level == 8:
-                return Text("▪", style="bright_yellow")
-            elif level == 9:
-                return Text("▪", style="red")
-            else:  # level 10
-                return Text("▪", style="bright_red")  # Hottest
-        
-        # Return the style string for a given level so we can color '@' similarly
-        def get_style_for_level(level):
-            if level == 0:
-                return "dim black"
-            elif level == 1:
-                return "blue"
-            elif level == 2:
-                return "bright_blue"
-            elif level == 3:
-                return "cyan"
-            elif level == 4:
-                return "bright_cyan"
-            elif level == 5:
-                return "green"
-            elif level == 6:
-                return "bright_green"
-            elif level == 7:
-                return "yellow"
-            elif level == 8:
-                return "bright_yellow"
-            elif level == 9:
-                return "red"
+        def get_gradient_color(normalized_density):
+            """
+            Create a smooth continuous gradient from purple (0.0) to red (1.0)
+            Using HSV color space for smooth rainbow-like transition
+            
+            Hue range: 280° (purple/violet) → 0° (red)
+            This creates a reverse rainbow: purple → blue → cyan → green → yellow → orange → red
+            """
+            if normalized_density <= 0.0:
+                return (128, 0, 128)  # Purple for zero density
+            
+            # Map normalized_density (0-1) to hue (280-0 degrees)
+            # 280° is purple/violet, 0° is red
+            hue = 280 - (normalized_density * 280)
+            
+            # Full saturation and value for vibrant colors
+            saturation = 1.0
+            value = 1.0
+            
+            # Convert HSV to RGB
+            # HSV to RGB conversion algorithm
+            h = hue / 60.0
+            c = value * saturation
+            x = c * (1 - abs(h % 2 - 1))
+            m = value - c
+            
+            if h < 1:
+                r_prime, g_prime, b_prime = c, x, 0
+            elif h < 2:
+                r_prime, g_prime, b_prime = x, c, 0
+            elif h < 3:
+                r_prime, g_prime, b_prime = 0, c, x
+            elif h < 4:
+                r_prime, g_prime, b_prime = 0, x, c
+            elif h < 5:
+                r_prime, g_prime, b_prime = x, 0, c
             else:
-                return "bright_red"
+                r_prime, g_prime, b_prime = c, 0, x
+            
+            # Convert to 0-255 range
+            r = int((r_prime + m) * 255)
+            g = int((g_prime + m) * 255)
+            b = int((b_prime + m) * 255)
+            
+            return (r, g, b)
+        
+        def get_colored_char(density):
+            """Get colored character based on exact density value"""
+            if density == 0:
+                return Text("·", style="dim black")  # Empty
+            
+            # Normalize density to 0-1 range
+            normalized = density / max_density
+            
+            # Get RGB color for this density
+            r, g, b = get_gradient_color(normalized)
+            
+            # Create Rich color string
+            color_str = f"rgb({r},{g},{b})"
+            
+            return Text("▪", style=color_str)
+        
+        def get_style_for_density(density):
+            """Get style string for a given density value"""
+            if density == 0:
+                return "dim black"
+            
+            # Normalize density to 0-1 range
+            normalized = density / max_density
+            
+            # Get RGB color for this density
+            r, g, b = get_gradient_color(normalized)
+            
+            return f"rgb({r},{g},{b})"
         
         # Create the visualization
         lines = []
@@ -1438,31 +1472,15 @@ class GlobalBestPSO(SwarmOptimizer):
         for y in range(grid_height):
             line_text = Text(f"{y:2d} ")
             for x in range(grid_width):
+                density = density_grid[y, x]
+                
                 if x == best_grid_x and y == best_grid_y:
-                    density = density_grid[y, x]
-                    if density == 0:
-                        char_level = 0
-                    else:
-                        if max_density == 1:
-                            char_level = 1
-                        else:
-                            normalized_density = density / max_density
-                            char_level = min(int(normalized_density * 9) + 1, 10)
-                    style_for_best = get_style_for_level(char_level)
+                    # Global best marker with color based on density
+                    style_for_best = get_style_for_density(density)
                     line_text.append("@", style=style_for_best)
                 else:
-                    density = density_grid[y, x]
-                    if density == 0:
-                        char_level = 0
-                    else:
-                        # Map density to color level (1-10 for non-zero densities)
-                        if max_density == 1:
-                            char_level = 1
-                        else:
-                            normalized_density = density / max_density
-                            char_level = min(int(normalized_density * 9) + 1, 10)
-                    
-                    colored_char = get_colored_char(char_level)
+                    # Regular cell with gradient color based on exact density
+                    colored_char = get_colored_char(density)
                     line_text.append(colored_char)
             
             grid_lines.append(line_text)
@@ -1480,7 +1498,7 @@ class GlobalBestPSO(SwarmOptimizer):
         # Add legend and statistics
         variance_explained = np.sum(self.pca.explained_variance_ratio_) * 100
         lines.append("")
-        lines.append("Legend: ·=empty ▪=density (blue→cyan→green→yellow→bright_yellow→red→bright_red) @=global best (colored by density)")
+        lines.append("Legend: ·=empty ▪=density (smooth gradient: purple→blue→cyan→green→yellow→red) @=global best (colored by density)")
         lines.append(f"PC1 vs PC2 | Variance explained: {variance_explained:.1f}% | Particles: {len(positions)} | Max density: {int(max_density)}")
         
         # Create Rich panel with colored content
@@ -1614,7 +1632,106 @@ class GlobalBestPSO(SwarmOptimizer):
             self.log_message(f"🎯 Multi-step exploration prediction: enabled ({n_alternative_swarms} alternatives × {prediction_steps} steps)")
             self.log_message(f"🔍 Grid refinement: enabled at {grid_refinement_threshold}% saturation (max resolution: {max_grid_resolution})")
 
-    def set_10n_selection_config(self, enable=True, multiplier=10, interval=10, on_fresh_start=True, on_checkpoint_resume=True, quality_threshold_pct=100.0):
+    def set_scout_config(self, enable_scouts=None, scouts_per_spawn=None, scout_lifetime=None, 
+                        adaptive_negative_fitness_threshold_enabled=None, negative_fitness_threshold=None,
+                        spawn_lhs_percentage=None, max_concurrent_groups=None, local_search_neighbors=None,
+                        initial_search_radius_percentage=None, radius_shrink_factor=None, 
+                        min_search_radius_percentage=None):
+        """Configure hill scout functionality settings
+        
+        This method allows updating scout configuration after initialization. Only provided
+        parameters will be updated; others will retain their current values.
+        
+        Parameters
+        ----------
+        enable_scouts : bool, optional
+            Enable/disable hill scout functionality
+        scouts_per_spawn : int, optional
+            Number of hill scout particles per spawn
+        scout_lifetime : int, optional
+            Lifetime of hill scout groups in iterations
+        adaptive_negative_fitness_threshold_enabled : bool, optional
+            Enable adaptive threshold (becomes 0 when global best < 0)
+        negative_fitness_threshold : float, optional
+            Fitness threshold for spawning hill scouts
+        spawn_lhs_percentage : float, optional
+            LHS hypercube size as percentage of parameter ranges
+        max_concurrent_groups : int, optional
+            Maximum number of concurrent hill scout groups
+        local_search_neighbors : int, optional
+            Number of neighbors to generate per scout
+        initial_search_radius_percentage : float, optional
+            Initial search radius as percentage of parameter ranges
+        radius_shrink_factor : float, optional
+            Shrink factor when no improvement (0.0-1.0)
+        min_search_radius_percentage : float, optional
+            Minimum search radius as percentage of parameter ranges
+            
+        Examples
+        --------
+        >>> # Enable scouts with custom settings
+        >>> optimizer.set_scout_config(
+        ...     enable_scouts=True,
+        ...     scouts_per_spawn=100,
+        ...     scout_lifetime=200
+        ... )
+        
+        >>> # Disable scouts
+        >>> optimizer.set_scout_config(enable_scouts=False)
+        
+        >>> # Update only specific parameters
+        >>> optimizer.set_scout_config(
+        ...     negative_fitness_threshold=1e4,
+        ...     max_concurrent_groups=50
+        ... )
+        """
+        # Update only provided parameters
+        if enable_scouts is not None:
+            self.scout_config['enable_scouts'] = enable_scouts
+        if scouts_per_spawn is not None:
+            self.scout_config['scouts_per_spawn'] = scouts_per_spawn
+        if scout_lifetime is not None:
+            self.scout_config['scout_lifetime'] = scout_lifetime
+        if adaptive_negative_fitness_threshold_enabled is not None:
+            self.scout_config['adaptive_negative_fitness_threshold_enabled'] = adaptive_negative_fitness_threshold_enabled
+        if negative_fitness_threshold is not None:
+            self.scout_config['negative_fitness_threshold'] = negative_fitness_threshold
+        if spawn_lhs_percentage is not None:
+            self.scout_config['spawn_lhs_percentage'] = spawn_lhs_percentage
+        if max_concurrent_groups is not None:
+            self.scout_config['max_concurrent_groups'] = max_concurrent_groups
+        if local_search_neighbors is not None:
+            self.scout_config['local_search_neighbors'] = local_search_neighbors
+        if initial_search_radius_percentage is not None:
+            self.scout_config['initial_search_radius_percentage'] = initial_search_radius_percentage
+        if radius_shrink_factor is not None:
+            self.scout_config['radius_shrink_factor'] = radius_shrink_factor
+        if min_search_radius_percentage is not None:
+            self.scout_config['min_search_radius_percentage'] = min_search_radius_percentage
+        
+        # Validate updated config
+        try:
+            self._validate_scout_config(self.scout_config)
+        except (ValueError, TypeError) as e:
+            self.log_message(f"⚠️ Scout config validation failed: {e}")
+            raise
+        
+        # Log updated configuration
+        self.log_message("🏔️ Scout configuration updated:")
+        self.log_message(f"   Enable scouts: {self.scout_config['enable_scouts']}")
+        if self.scout_config['enable_scouts']:
+            self.log_message(f"   Scouts per spawn: {self.scout_config['scouts_per_spawn']}")
+            self.log_message(f"   Scout lifetime: {self.scout_config['scout_lifetime']} iterations")
+            self.log_message(f"   Adaptive threshold: {self.scout_config['adaptive_negative_fitness_threshold_enabled']}")
+            self.log_message(f"   Negative fitness threshold: {self.scout_config['negative_fitness_threshold']:.0e}")
+            self.log_message(f"   Spawn LHS percentage: {self.scout_config['spawn_lhs_percentage']:.2%}")
+            self.log_message(f"   Max concurrent groups: {self.scout_config['max_concurrent_groups']}")
+            self.log_message(f"   Local search neighbors: {self.scout_config['local_search_neighbors']}")
+            self.log_message(f"   Initial search radius: {self.scout_config['initial_search_radius_percentage']:.2%}")
+            self.log_message(f"   Radius shrink factor: {self.scout_config['radius_shrink_factor']:.2f}")
+            self.log_message(f"   Min search radius: {self.scout_config['min_search_radius_percentage']:.2%}")
+
+    def set_10n_selection_config(self, enable=True, multiplier=10, interval=10, on_fresh_start=True, on_checkpoint_resume=True, quality_threshold_pct=100.0, max_batches=100, dynamic_target=False):
         """Configure adaptive quality selection for continuous quality injection
         
         This method configures the adaptive quality selection strategy, which samples
@@ -1623,7 +1740,8 @@ class GlobalBestPSO(SwarmOptimizer):
         
         The strategy keeps sampling until:
         - quality_threshold_pct% of n particles are found (fitness < threshold), OR
-        - max_batches (100) is reached (fallback to best n from all evaluated)
+        - dynamic_target mode: matches the number of current particles above threshold, OR
+        - max_batches is reached (fallback to best n from all evaluated)
         
         Parameters
         ----------
@@ -1640,6 +1758,14 @@ class GlobalBestPSO(SwarmOptimizer):
         quality_threshold_pct : float
             Percentage of particles that must be below threshold (default: 100.0 = all particles)
             Examples: 80.0 = stop when 80% are below threshold, 50.0 = stop when 50% are below
+            Note: Ignored when dynamic_target=True
+        max_batches : int
+            Maximum number of batches to sample before fallback (default: 100)
+        dynamic_target : bool
+            If True, target number adapts to current swarm state (default: False)
+            When enabled, targets the number of particles currently above threshold
+            This makes selection more adaptive: if 30 particles are above threshold,
+            it will try to find 30 quality replacements
             
         Notes
         -----
@@ -1648,6 +1774,9 @@ class GlobalBestPSO(SwarmOptimizer):
         
         Setting quality_threshold_pct < 100.0 allows the optimizer to stop earlier on hard
         landscapes where finding all n quality particles would take too many batches.
+        
+        Dynamic target mode is useful for periodic selection where you want to replace
+        only the particles that are currently performing poorly (above threshold).
         
         Examples
         --------
@@ -1664,6 +1793,13 @@ class GlobalBestPSO(SwarmOptimizer):
         ...     multiplier=10,
         ...     quality_threshold_pct=80.0
         ... )
+        
+        >>> # Dynamic target: adapt to current swarm state
+        >>> optimizer.set_10n_selection_config(
+        ...     enable=True,
+        ...     multiplier=10,
+        ...     dynamic_target=True
+        ... )
         """
         self.enable_10n_selection = enable
         self.selection_multiplier = multiplier
@@ -1671,13 +1807,19 @@ class GlobalBestPSO(SwarmOptimizer):
         self.selection_on_fresh_start = on_fresh_start
         self.selection_on_checkpoint_resume = on_checkpoint_resume
         self.selection_quality_threshold_pct = quality_threshold_pct
+        self.selection_max_batches = max_batches
+        self.selection_dynamic_target = dynamic_target
         
         self.log_message(f"🎯 Adaptive quality selection: {'enabled' if enable else 'disabled'}")
         if enable:
             threshold = self.scout_config['negative_fitness_threshold']
-            target_n = int(self.n_particles * quality_threshold_pct / 100.0)
-            self.log_message(f"📊 {multiplier}n candidates per batch, target: {target_n}/{self.n_particles} particles < {threshold:.0e} ({quality_threshold_pct:.0f}%)")
-            self.log_message(f"🔁 Runs every {interval} iterations")
+            if dynamic_target:
+                self.log_message(f"📊 {multiplier}n candidates per batch, dynamic target mode (adapts to current swarm state)")
+                self.log_message(f"   Target: number of particles currently > {threshold:.0e}")
+            else:
+                target_n = int(self.n_particles * quality_threshold_pct / 100.0)
+                self.log_message(f"📊 {multiplier}n candidates per batch, target: {target_n}/{self.n_particles} particles < {threshold:.0e} ({quality_threshold_pct:.0f}%)")
+            self.log_message(f"🔁 Runs every {interval} iterations, max {max_batches} batches")
             self.log_message(f"🚀 Fresh start: {'enabled' if on_fresh_start else 'disabled'}")
             self.log_message(f"🔄 Checkpoint resume: {'enabled' if on_checkpoint_resume else 'disabled'}")
 
@@ -1935,7 +2077,7 @@ class GlobalBestPSO(SwarmOptimizer):
         self.log_message(f"🚀 Smart velocity boost applied to {n_boost}/{self.n_particles} particles ({boost_percentage:.1f}%) (global best particle #{global_best_particle_idx} protected)")
         self.log_message(f"📊 Selection: High pbest (≥{fitness_threshold:.0e}): {high_fitness_count}, Low pbest: {low_fitness_count}")
         self.log_message(f"📈 Boosted particles pbest - Min: {before_boost_stats['min']:.6e}, Avg: {before_boost_stats['mean']:.6e}, Max: {before_boost_stats['max']:.6e}")
-        self.log_message(f"🔄 Reset pbest for all boosted particles - fresh start opportunity")
+        self.log_message("🔄 Reset pbest for all boosted particles - fresh start opportunity")
         
         # Show "after boost" statistics if we have data from previous boost
         if hasattr(self, 'last_boosted_indices') and hasattr(self, 'last_boost_iteration') and self.last_boost_iteration == iteration - self.reinit_interval:
@@ -1991,19 +2133,16 @@ class GlobalBestPSO(SwarmOptimizer):
         # Give it a random velocity like other particles
         if self.velocity_clamp is not None:
             min_vel, max_vel = self.velocity_clamp
-            self.swarm.velocity[0] = 0
-            # self.swarm.velocity[0] = np.random.uniform(min_vel, max_vel, self.dimensions)
+            self.swarm.velocity[0] = np.random.uniform(min_vel, max_vel, self.dimensions)
         else:
             if self.bounds is not None:
                 lower_bounds, upper_bounds = self.bounds
                 vel_range = 0.1 * (upper_bounds - lower_bounds)
-                # self.swarm.velocity[0] = np.random.uniform(-vel_range, vel_range, self.dimensions)
-                self.swarm.velocity[0] = 0
+                self.swarm.velocity[0] = np.random.uniform(-vel_range, vel_range, self.dimensions)
             else:
-                self.swarm.velocity[0] = 0
-                # self.swarm.velocity[0] = np.random.uniform(-0.1, 0.1, self.dimensions)
+                self.swarm.velocity[0] = np.random.uniform(-0.1, 0.1, self.dimensions)
         
-        self.log_message(f"🎯 Injected init_pos particle at position 0 (fresh start)")
+        self.log_message("🎯 Injected init_pos particle at position 0 (fresh start)")
 
     def _inject_init_pos_checkpoint_resume(self, objective_func, **kwargs):
         """Inject init_pos particle during checkpoint resume by replacing worst particle"""
@@ -2570,9 +2709,6 @@ class GlobalBestPSO(SwarmOptimizer):
             lvl=log_level,
         )
         
-        # Close Pool of Processes
-        if n_processes is not None:
-            pool.close()
             
         return (final_best_cost, final_best_pos)
 
@@ -2768,8 +2904,8 @@ class GlobalBestPSO(SwarmOptimizer):
             self.log_message(f"🚀 Farthest-point boost applied to {n_boost}/{self.n_particles} particles ({boost_percentage:.1f}%) (global best particle #{global_best_particle_idx} protected)")
             self.log_message(f"📊 Selection: High pbest (≥{fitness_threshold:.0e}): {high_fitness_count}, Low pbest: {low_fitness_count}")
             self.log_message(f"📈 Boosted particles pbest - Min: {before_boost_stats['min']:.6e}, Avg: {before_boost_stats['mean']:.6e}, Max: {before_boost_stats['max']:.6e}")
-            self.log_message(f"🔄 Reset pbest for all boosted particles - fresh start opportunity")
-            self.log_message(f"🎯 Placed particles at farthest candidates from discovered regions")
+            self.log_message("🔄 Reset pbest for all boosted particles - fresh start opportunity")
+            self.log_message("🎯 Placed particles at farthest candidates from discovered regions")
             
             # Show "after boost" statistics if we have data from previous boost
             if hasattr(self, 'last_boosted_indices') and hasattr(self, 'last_boost_iteration') and self.last_boost_iteration == iteration - self.reinit_interval:
@@ -3344,7 +3480,7 @@ class GlobalBestPSO(SwarmOptimizer):
         
         # Log relocation details
         self.log_message(f"🚀 Relocated {relocated_count} particles: {overcrowding_count} overcrowding, {stagnation_count} stagnation")
-        self.log_message(f"🎯 Particles placed in unvisited regions with fresh velocities and reset pbest")
+        self.log_message("🎯 Particles placed in unvisited regions with fresh velocities and reset pbest")
         
         # Calculate and log average cell density on populated cells
         if hasattr(self, 'cell_occupancy') and self.cell_occupancy:
@@ -3540,19 +3676,49 @@ class GlobalBestPSO(SwarmOptimizer):
             # Get fitness threshold from scout config
             fitness_threshold = self.scout_config['negative_fitness_threshold']
             batch_size = self.n_particles * self.selection_multiplier
-            max_batches = 100
+            max_batches = self.selection_max_batches
             
-            # Calculate target number of quality particles based on percentage
-            target_quality_particles = int(self.n_particles * self.selection_quality_threshold_pct / 100.0)
-            target_quality_particles = max(1, target_quality_particles)  # At least 1
+            # Calculate target number of quality particles
+            if getattr(self, 'selection_dynamic_target', False) and not is_fresh_start:
+                # Dynamic target mode: count how many current particles are above threshold
+                n_above_threshold = np.sum(self.swarm.pbest_cost >= fitness_threshold)
+                target_quality_particles = n_above_threshold
+                target_quality_particles = max(1, target_quality_particles)  # At least 1
+                
+                dynamic_target_info = f"dynamic target: {n_above_threshold} particles currently ≥ {fitness_threshold:.0e}"
+            else:
+                # Static target mode: use percentage
+                target_quality_particles = int(self.n_particles * self.selection_quality_threshold_pct / 100.0)
+                target_quality_particles = max(1, target_quality_particles)  # At least 1
+                
+                dynamic_target_info = f"static target: {self.selection_quality_threshold_pct:.0f}%"
             
             self.log_message(
                 f"{log_emoji} {selection_type}: Adaptive quality selection\n"
-                f"   Target: {target_quality_particles}/{self.n_particles} particles with fitness < {fitness_threshold:.0e} ({self.selection_quality_threshold_pct:.0f}%)\n"
+                f"   Target: {target_quality_particles}/{self.n_particles} particles with fitness < {fitness_threshold:.0e} ({dynamic_target_info})\n"
                 f"   Batch size: {batch_size} candidates ({self.selection_multiplier}n)\n"
                 f"   Max batches: {max_batches}",
                 emoji=log_emoji
             )
+            
+            # Generate single large LHS sample upfront for better space-filling
+            total_lhs_size = batch_size * max_batches
+            self.log_message(
+                f"   Generating single LHS sample: {total_lhs_size:,} candidates "
+                f"({batch_size:,} per batch × {max_batches} max batches)"
+            )
+            
+            lhs_start_time = time.time()
+            all_candidate_positions = self._initialize_positions_with_strategy(total_lhs_size, self.bounds)
+            lhs_time = time.time() - lhs_start_time
+            
+            self.log_message(f"   LHS generation complete in {lhs_time:.2f}s")
+            
+            # Handle init_pos injection for fresh start (replace first candidate)
+            inject_init_pos = is_fresh_start and self.custom_init_pos is not None
+            if inject_init_pos:
+                all_candidate_positions[0] = np.array(self.custom_init_pos)
+                self.log_message("🎯 Injected init_pos into first candidate")
             
             # Collect good candidates across batches
             good_positions = []
@@ -3561,20 +3727,17 @@ class GlobalBestPSO(SwarmOptimizer):
             batch_count = 0
             eval_start_time = time.time()
             
-            # Handle init_pos injection for fresh start (add to first batch)
-            inject_init_pos = is_fresh_start and self.custom_init_pos is not None
-            
-            # Sample batches until we have enough good candidates
-            while len(good_positions) < target_quality_particles and batch_count < max_batches:
+            # Evaluate in batches with early termination
+            for batch_idx in range(max_batches):
+                if len(good_positions) >= target_quality_particles:
+                    break  # Early termination - found enough good candidates
+                
                 batch_count += 1
                 
-                # Generate batch with fresh LHS sampling
-                batch_positions = self._initialize_positions_with_strategy(batch_size, self.bounds)
-                
-                # Inject init_pos into first batch if needed
-                if inject_init_pos and batch_count == 1:
-                    batch_positions[0] = np.array(self.custom_init_pos)
-                    self.log_message("🎯 Injected init_pos into first batch")
+                # Extract batch from pre-generated LHS sample
+                batch_start = batch_idx * batch_size
+                batch_end = batch_start + batch_size
+                batch_positions = all_candidate_positions[batch_start:batch_end]
                 
                 # Evaluate batch
                 temp_swarm = type('TempSwarm', (), {})()
@@ -3598,6 +3761,16 @@ class GlobalBestPSO(SwarmOptimizer):
                 )
             
             eval_time = time.time() - eval_start_time
+            
+            # Calculate early termination savings
+            unevaluated_batches = max_batches - batch_count
+            saved_evaluations = unevaluated_batches * batch_size
+            
+            if saved_evaluations > 0:
+                self.log_message(
+                    f"⚡ Early termination: saved {saved_evaluations:,} evaluations "
+                    f"({unevaluated_batches} batches skipped)"
+                )
             
             # Handle results based on how many good candidates we found
             if len(good_positions) >= target_quality_particles:
@@ -3978,7 +4151,7 @@ class GlobalBestPSO(SwarmOptimizer):
                             )
                             
                             # Launch spawner particle away from spawn point
-                            self._launch_spawner_particle(particle_idx, spawn_point)
+                            # self._launch_spawner_particle(particle_idx, spawn_point)  # Disabled: keep spawner at spawn location
                             
                             spawned_this_iteration += 1
                             
@@ -3993,7 +4166,7 @@ class GlobalBestPSO(SwarmOptimizer):
                                     f"(fitness: {current_fitness:.6e}) spawned group {group_id} "
                                     f"with {self.scout_config['scouts_per_spawn']} scouts "
                                     f"({len(self.active_scout_groups)}/{max_groups} active groups) "
-                                    f"⚡ BYPASSED CAPACITY LIMIT (truly negative) 🚀 Spawner launched away",
+                                    f"⚡ BYPASSED CAPACITY LIMIT (truly negative)",
                                     emoji="🌱"
                                 )
                             else:
@@ -4001,8 +4174,7 @@ class GlobalBestPSO(SwarmOptimizer):
                                     f"🌱 Hill scout group spawned! Particle #{particle_idx} "
                                     f"(fitness: {current_fitness:.6e}) spawned group {group_id} "
                                     f"with {self.scout_config['scouts_per_spawn']} scouts "
-                                    f"({len(self.active_scout_groups)}/{max_groups} active groups) "
-                                    f"🚀 Spawner launched away",
+                                    f"({len(self.active_scout_groups)}/{max_groups} active groups)",
                                     emoji="🌱"
                                 )
                             
@@ -5134,6 +5306,7 @@ class GlobalBestPSO(SwarmOptimizer):
             self.log_message("⏱️ Scout group lifetimes:")
             for group_id, group in self.active_scout_groups.items():
                 remaining = group.get('remaining_iterations', 0)
+                spawner_id = group.get('spawner_id', 'unknown')
                 
                 # Check if this group is immortal (spawn point matches global best)
                 is_immortal = False
@@ -5143,9 +5316,9 @@ class GlobalBestPSO(SwarmOptimizer):
                         is_immortal = True
                 
                 if is_immortal:
-                    self.log_message(f"   {group_id}: {remaining} iterations (♾️ immortal - at global best)")
+                    self.log_message(f"   {group_id} (particle {spawner_id}): {remaining} iterations (♾️ immortal - at global best)")
                 else:
-                    self.log_message(f"   {group_id}: {remaining} iterations remaining")
+                    self.log_message(f"   {group_id} (particle {spawner_id}): {remaining} iterations remaining")
             
         except Exception as e:
             self.log_message(f"⚠️ Error logging scout group lifetimes: {e}")
@@ -5350,7 +5523,7 @@ class GlobalBestPSO(SwarmOptimizer):
                 
                 # Log top spawners
                 top_spawners = sorted(spawner_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-                self.log_message(f"   Top spawning particles:", emoji=None)
+                self.log_message("   Top spawning particles:", emoji=None)
                 for spawner_id, count in top_spawners:
                     self.log_message(f"   ├─ Particle #{spawner_id}: {count} groups spawned", emoji=None)
             
@@ -5384,7 +5557,7 @@ class GlobalBestPSO(SwarmOptimizer):
                     reverse=True
                 )[:5]
                 
-                self.log_message(f"   Top contributing spawners:", emoji=None)
+                self.log_message("   Top contributing spawners:", emoji=None)
                 for spawner_id, stats in top_contributors:
                     global_best_info = f" ({stats['global_best_count']} global best)" if stats['global_best_count'] > 0 else ""
                     self.log_message(
