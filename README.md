@@ -1,10 +1,10 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit, OKX, Bitget, GateIO, Binance and Hyperliquid
+# Trading bot running on Bybit, OKX, Bitget, GateIO, Binance, Kucoin and Hyperliquid
 
 :warning: **Used at one's own risk** :warning:
 
-v7.3.1
+v7.8.2
 
 
 ## Overview
@@ -13,7 +13,7 @@ Passivbot is a cryptocurrency trading bot written in Python and Rust, intended t
 
 It operates on perpetual futures derivatives markets, automatically creating and cancelling limit buy and sell orders on behalf of the user. It does not try to predict future price movements, it does not use technical indicators, nor does it follow trends. Rather, it is a contrarian market maker, providing resistance to price changes in both directions, thereby "serving the market" as a price stabilizer.  
 
-Passivbot's behavior may be backtested on historical price data, using the included backtester whose CPU heavy functions are written in Rust for speed. Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates, converging on the optimal ones with an evolutionary algorithm.  
+Order planning is computed by a shared Rust orchestrator used by both live trading and backtesting for speed and consistency. Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates, converging on the optimal ones with an evolutionary algorithm.  
 
 ## Strategy
 
@@ -36,6 +36,8 @@ Passivbot manages underperforming, or "stuck", positions by realizing small loss
 
 To install Passivbot and its dependencies, follow the steps below.
 
+Passivbot requires **Python 3.12**. Earlier versions are not supported.
+
 ### Step 1: Clone the Repository
 
 First, clone the Passivbot repository to the local machine:
@@ -57,14 +59,31 @@ After installation, restart the terminal or command prompt.
 
 Create a virtual environment to manage dependencies:
 
+ **Linux/macOS:**
 ```sh
 python3 -m venv venv
 ```
 
+ **Windows (Command Prompt or PowerShell):**
+```cmd
+py -3.12 -m venv venv
+```
+
 Activate the virtual environment:
 
+ **Linux/macOS:**
 ```sh
 source venv/bin/activate
+```
+
+ **Windows (Command Prompt):**
+```cmd
+venv\Scripts\activate
+```
+
+ **Windows (PowerShell):**
+```powershell
+.\venv\Scripts\Activate.ps1
 ```
 
 ### Step 4: Install Python Dependencies
@@ -99,6 +118,10 @@ Add your keys to api-keys.json.
 
 ### Step 7: Run Passivbot
 
+> **Hint:**  
+> To ensure cache folder names are Windows-compatible (even outside Windows), set the environment variable `WINDOWS_COMPATIBILITY=1`.   
+> This is only required in certain scenarios, e.g., running under Docker (Linux) while mounting the `caches` folder to a Windows host.
+
 To start the bot with the default settings, run:
 
 ```sh
@@ -112,6 +135,18 @@ or make a new configuration file, using `configs/template.json` as a template, a
 python3 src/main.py path/to/config.json
 ```
 
+### Logging
+
+Passivbot uses Python's logging module throughout the bot, backtester, and supporting tools.  
+- Use `--debug-level {0-3}` (alias `--log-level`) on `src/main.py` or `src/backtest.py` to adjust verbosity at runtime: `0 = warnings only`, `1 = info`, `2 = debug`, `3 = trace`.  
+- Use `--verbose` on `src/main.py` to force debug logging (`--log-level debug`).  
+- Persist a default by adding a top-level section to your config: `"logging": {"level": 2}`. The CLI flag always overrides the config value for that run.
+- CandlestickManager and other subsystems inherit the chosen level so EMA warm-up, data fetching, and cache behaviour can be inspected consistently.
+
+### Running Multiple Bots
+
+Running several Passivbot instances against the same exchange on one machine is supported. Each process shares the same on-disk OHLCV cache, and the candlestick manager now uses short-lived, self-healing locks with automatic stale cleanup so that one stalled process cannot block the rest. No manual deletion of lock files is required; the bot removes stale locks on startup and logs whenever a lock acquisition times out.
+
 ## Jupyter Lab
 
 Jupyter lab needs to be run in the same virtual environment as the bot. Activate venv (see installation instructions above, step 3), and launch Jupyter lab from the Passivbot root dir with:
@@ -121,7 +156,7 @@ python3 -m jupyter lab
 
 ## Requirements
 
-- Python >= 3.8
+- Python >= 3.12
 - [requirements.txt](requirements.txt) dependencies
 
 ## Pre-optimized configurations
@@ -142,9 +177,9 @@ For more detailed information about Passivbot, see documentation files here: [do
 
 ## Third Party Links, Referrals and Tip Jar
 
-**Passivbot Manager Service:**  
-There is a paid manager service to run Passivbot on the user's behalf:  
-www.passivbotmanager.com  
+**Hyperliquid Reference Vault**
+Passivbot's default template config running on a Hyperliquid Vault:  
+https://app.hyperliquid.xyz/vaults/0x490af7d4a048a81db0f677517ed6373565b42349
 
 **Passivbot GUI**
 A graphical user interface for Passivbot:  
@@ -155,8 +190,9 @@ Signing up using these referrals is appreciated:
 https://accounts.binance.com/register?ref=TII4B07C  
 https://partner.bybit.com/b/passivbot  
 https://partner.bitget.com/bg/Y8FU1W  
-https://www.okx.com/join/PASSIVBOT  (20% rebate)  
+https://www.okx.com/join/PASSIVBOT  
 https://app.hyperliquid.xyz/join/PASSIVBOT  
+https://www.kucoin.com/r/broker/CX8QZQJX  
 
 **Note on Binance**  
 To support continued Passivbot development, please use a Binance account which  
@@ -178,11 +214,34 @@ If the robot is profitable, consider donating as showing gratitude for its devel
 0x4b7b5bf6bea228052b775c052843fde1c63ec530  
 - USDT or USDC Arbitrum One:  
 0x4b7b5bf6bea228052b775c052843fde1c63ec530  
+- Zcash (ZEC):  
+u1jlans93rrqusqx2wp5020aezyt0q22l4tuy7ezkna06fuyaa2gxzremf50wsj3k83a4cm0cncs6zt9urlpte7a3nzvq992z48jxzem455acmhmhhwfwjcjwl8z79vlznla0r3jln6ety565254h96whnllcmepmpqu3ft9hxtqvkn0m7  
 
 Bitcoin (BTC) via Strike:  
 enarjord@strike.me
 
 ## License
+This is free and unencumbered software released into the public domain.
 
-Released freely without conditions.
-Anybody may copy, distribute, modify, use or misuse for commercial, non-commercial, educational or non-educational purposes, censor, claim as one's own or otherwise do whatever without permission from anybody.
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <https://unlicense.org/>

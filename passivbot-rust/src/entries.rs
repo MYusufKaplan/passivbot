@@ -3,8 +3,18 @@ use crate::types::{
 };
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
-    calc_wallet_exposure_if_filled, cost_to_qty, interpolate, round_, round_dn, round_up,
+    calc_wallet_exposure_if_filled, cost_to_qty, interpolate, quantize_price, quantize_qty, round_,
+    round_dn, round_up, RoundingMode,
 };
+
+pub fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
+    let base = bot_params.wallet_exposure_limit;
+    if base <= 0.0 {
+        base
+    } else {
+        base * (1.0 + bot_params.risk_we_excess_allowance_pct.max(0.0))
+    }
+}
 
 pub fn calc_initial_entry_qty(
     exchange_params: &ExchangeParams,
@@ -16,7 +26,9 @@ pub fn calc_initial_entry_qty(
         calc_min_entry_qty(entry_price, &exchange_params),
         round_(
             cost_to_qty(
-                balance * bot_params.wallet_exposure_limit * bot_params.entry_initial_qty_pct,
+                balance
+                    * wallet_exposure_limit_with_allowance(bot_params)
+                    * bot_params.entry_initial_qty_pct,
                 entry_price,
                 exchange_params.c_mult,
             ),
@@ -47,7 +59,12 @@ pub fn calc_cropped_reentry_qty(
     balance: f64,
     entry_qty: f64,
     entry_price: f64,
+    wallet_exposure_limit_cap: f64,
 ) -> (f64, f64) {
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     let position_size_abs = position.size.abs();
     let entry_qty_abs = entry_qty.abs();
     let wallet_exposure_if_filled = calc_wallet_exposure_if_filled(
@@ -59,10 +76,10 @@ pub fn calc_cropped_reentry_qty(
         &exchange_params,
     );
     let min_entry_qty = calc_min_entry_qty(entry_price, &exchange_params);
-    if wallet_exposure_if_filled > bot_params.wallet_exposure_limit * 1.01 {
+    if wallet_exposure_if_filled > effective_wallet_exposure_limit * 1.01 {
         // reentry too big. Crop current reentry qty.
         let entry_qty_abs = interpolate(
-            bot_params.wallet_exposure_limit,
+            effective_wallet_exposure_limit,
             &[wallet_exposure, wallet_exposure_if_filled],
             &[position_size_abs, position_size_abs + entry_qty_abs],
         ) - position_size_abs;
@@ -85,16 +102,22 @@ pub fn calc_reentry_qty(
     entry_price: f64,
     balance: f64,
     position_size: f64,
+    double_down_factor: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    wallet_exposure_limit_cap: f64,
 ) -> f64 {
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     f64::max(
         calc_min_entry_qty(entry_price, &exchange_params),
         round_(
             f64::max(
-                position_size.abs() * bot_params.entry_grid_double_down_factor,
+                position_size.abs() * double_down_factor,
                 cost_to_qty(balance, entry_price, exchange_params.c_mult)
-                    * bot_params.wallet_exposure_limit
+                    * effective_wallet_exposure_limit
                     * bot_params.entry_initial_qty_pct,
             ),
             exchange_params.qty_step,
@@ -108,12 +131,26 @@ fn calc_reentry_price_bid(
     order_book_bid: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    entry_volatility_logrange_ema_1h: f64,
+    wallet_exposure_limit_cap: f64,
 ) -> f64 {
-    let multiplier =
-        (wallet_exposure / bot_params.wallet_exposure_limit) * bot_params.entry_grid_spacing_weight;
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
+    let we_multiplier = if effective_wallet_exposure_limit > 0.0 {
+        (wallet_exposure / effective_wallet_exposure_limit)
+            * bot_params.entry_grid_spacing_we_weight
+    } else {
+        0.0
+    };
+    let log_multiplier =
+        entry_volatility_logrange_ema_1h * bot_params.entry_grid_spacing_volatility_weight;
+    let spacing_multiplier = 1.0 + we_multiplier + log_multiplier;
     let reentry_price = f64::min(
         round_dn(
-            position_price * (1.0 - bot_params.entry_grid_spacing_pct * (1.0 + multiplier)),
+            position_price
+                * (1.0 - bot_params.entry_grid_spacing_pct * spacing_multiplier.max(0.0)),
             exchange_params.price_step,
         ),
         order_book_bid,
@@ -131,12 +168,26 @@ fn calc_reentry_price_ask(
     order_book_ask: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    entry_volatility_logrange_ema_1h: f64,
+    wallet_exposure_limit_cap: f64,
 ) -> f64 {
-    let multiplier =
-        (wallet_exposure / bot_params.wallet_exposure_limit) * bot_params.entry_grid_spacing_weight;
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
+    let we_multiplier = if effective_wallet_exposure_limit > 0.0 {
+        (wallet_exposure / effective_wallet_exposure_limit)
+            * bot_params.entry_grid_spacing_we_weight
+    } else {
+        0.0
+    };
+    let log_multiplier =
+        entry_volatility_logrange_ema_1h * bot_params.entry_grid_spacing_volatility_weight;
+    let spacing_multiplier = 1.0 + we_multiplier + log_multiplier;
     let reentry_price = f64::max(
         round_up(
-            position_price * (1.0 + bot_params.entry_grid_spacing_pct * (1.0 + multiplier)),
+            position_price
+                * (1.0 + bot_params.entry_grid_spacing_pct * spacing_multiplier.max(0.0)),
             exchange_params.price_step,
         ),
         order_book_ask,
@@ -153,8 +204,9 @@ pub fn calc_grid_entry_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
+    wallet_exposure_limit_cap: f64,
 ) -> Order {
-    if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
+    if wallet_exposure_limit_with_allowance(bot_params) == 0.0 || state_params.balance <= 0.0 {
         return Order::default();
     }
     let initial_entry_price = calc_ema_price_bid(
@@ -166,7 +218,7 @@ pub fn calc_grid_entry_long(
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
-    let initial_entry_qty = calc_initial_entry_qty(
+    let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
         state_params.balance,
@@ -187,6 +239,9 @@ pub fn calc_grid_entry_long(
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialLong,
         };
+    } else if position.size < initial_entry_qty {
+        initial_entry_qty = round_(position.size, exchange_params.qty_step)
+            .max(calc_min_entry_qty(initial_entry_price, &exchange_params));
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -194,7 +249,11 @@ pub fn calc_grid_entry_long(
         position.size,
         position.price,
     );
-    if wallet_exposure >= bot_params.wallet_exposure_limit * 0.999 {
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
+    if wallet_exposure >= effective_wallet_exposure_limit * 0.999 {
         return Order::default();
     }
 
@@ -205,6 +264,8 @@ pub fn calc_grid_entry_long(
         state_params.order_book.bid,
         exchange_params,
         bot_params,
+        state_params.entry_volatility_logrange_ema_1h,
+        effective_wallet_exposure_limit,
     );
     if reentry_price <= 0.0 {
         return Order::default();
@@ -214,8 +275,10 @@ pub fn calc_grid_entry_long(
             reentry_price,
             state_params.balance,
             position.size,
+            bot_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
+            effective_wallet_exposure_limit,
         ),
         initial_entry_qty,
     );
@@ -227,6 +290,7 @@ pub fn calc_grid_entry_long(
         state_params.balance,
         reentry_qty,
         reentry_price,
+        effective_wallet_exposure_limit,
     );
     if reentry_qty_cropped < reentry_qty {
         return Order {
@@ -249,18 +313,22 @@ pub fn calc_grid_entry_long(
         state_params.order_book.bid,
         exchange_params,
         bot_params,
+        state_params.entry_volatility_logrange_ema_1h,
+        effective_wallet_exposure_limit,
     );
     let next_reentry_qty = f64::max(
         calc_reentry_qty(
             next_reentry_price,
             state_params.balance,
             psize_if_filled,
+            bot_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
+            effective_wallet_exposure_limit,
         ),
         initial_entry_qty,
     );
-    let (next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
+    let (_next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
         &Position {
@@ -271,12 +339,13 @@ pub fn calc_grid_entry_long(
         state_params.balance,
         next_reentry_qty,
         next_reentry_price,
+        effective_wallet_exposure_limit,
     );
     let effective_double_down_factor = next_reentry_qty_cropped / psize_if_filled;
     if effective_double_down_factor < bot_params.entry_grid_double_down_factor * 0.25 {
         // next reentry too small. Inflate current reentry.
         let new_entry_qty = interpolate(
-            bot_params.wallet_exposure_limit,
+            effective_wallet_exposure_limit,
             &[wallet_exposure, wallet_exposure_if_filled],
             &[position.size, position.size + reentry_qty],
         ) - position.size;
@@ -302,10 +371,12 @@ pub fn calc_next_entry_long(
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     // determines whether trailing or grid order, returns Order
-    if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
+    let base_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
+    if base_wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
         // no orders
         return Order::default();
     }
+    let allowed_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
     if bot_params.entry_trailing_grid_ratio >= 1.0 || bot_params.entry_trailing_grid_ratio <= -1.0 {
         // return trailing only
         return calc_trailing_entry_long(
@@ -314,10 +385,17 @@ pub fn calc_next_entry_long(
             &bot_params,
             &position,
             &trailing_price_bundle,
+            allowed_wallet_exposure_limit,
         );
     } else if bot_params.entry_trailing_grid_ratio == 0.0 {
         // return grid only
-        return calc_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
+        return calc_grid_entry_long(
+            &exchange_params,
+            &state_params,
+            &bot_params,
+            &position,
+            allowed_wallet_exposure_limit,
+        );
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -325,55 +403,54 @@ pub fn calc_next_entry_long(
         position.size,
         position.price,
     );
-    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    let wallet_exposure_ratio = if base_wallet_exposure_limit > 0.0 {
+        wallet_exposure / base_wallet_exposure_limit
+    } else {
+        0.0
+    };
     if bot_params.entry_trailing_grid_ratio > 0.0 {
         // trailing first
         if wallet_exposure_ratio < bot_params.entry_trailing_grid_ratio {
-            // return trailing order, but crop to max bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio + 1%
-            if wallet_exposure == 0.0 {
-                calc_trailing_entry_long(
-                    &exchange_params,
-                    &state_params,
-                    &bot_params,
-                    &position,
-                    &trailing_price_bundle,
-                )
+            let wallet_exposure_limit_cap = if wallet_exposure == 0.0 {
+                allowed_wallet_exposure_limit
             } else {
-                let mut bot_params_modified = bot_params.clone();
-                bot_params_modified.wallet_exposure_limit =
-                    bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio * 1.01;
-                calc_trailing_entry_long(
-                    &exchange_params,
-                    &state_params,
-                    &bot_params_modified,
-                    &position,
-                    &trailing_price_bundle,
-                )
-            }
+                (base_wallet_exposure_limit * bot_params.entry_trailing_grid_ratio * 1.01)
+                    .min(allowed_wallet_exposure_limit)
+            };
+            calc_trailing_entry_long(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                &position,
+                &trailing_price_bundle,
+                wallet_exposure_limit_cap,
+            )
         } else {
             // return grid order
-            calc_grid_entry_long(&exchange_params, &state_params, &bot_params, &position)
+            calc_grid_entry_long(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                &position,
+                allowed_wallet_exposure_limit,
+            )
         }
     } else {
         // grid first
         if wallet_exposure_ratio < 1.0 + bot_params.entry_trailing_grid_ratio {
-            // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.entry_trailing_grid_ratio) + 1%
-            if wallet_exposure == 0.0 {
-                calc_grid_entry_long(&exchange_params, &state_params, &bot_params, &position)
+            let wallet_exposure_limit_cap = if wallet_exposure == 0.0 {
+                allowed_wallet_exposure_limit
             } else {
-                let mut bot_params_modified = bot_params.clone();
-                if wallet_exposure != 0.0 {
-                    bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
-                        * (1.0 + bot_params.entry_trailing_grid_ratio)
-                        * 1.01;
-                }
-                calc_grid_entry_long(
-                    &exchange_params,
-                    &state_params,
-                    &bot_params_modified,
-                    &position,
-                )
-            }
+                (base_wallet_exposure_limit * (1.0 + bot_params.entry_trailing_grid_ratio) * 1.01)
+                    .min(allowed_wallet_exposure_limit)
+            };
+            calc_grid_entry_long(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                &position,
+                wallet_exposure_limit_cap,
+            )
         } else {
             calc_trailing_entry_long(
                 &exchange_params,
@@ -381,6 +458,7 @@ pub fn calc_next_entry_long(
                 &bot_params,
                 &position,
                 &trailing_price_bundle,
+                allowed_wallet_exposure_limit,
             )
         }
     }
@@ -392,6 +470,7 @@ pub fn calc_trailing_entry_long(
     bot_params: &BotParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
+    wallet_exposure_limit_cap: f64,
 ) -> Order {
     let initial_entry_price = calc_ema_price_bid(
         exchange_params.price_step,
@@ -402,7 +481,7 @@ pub fn calc_trailing_entry_long(
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
-    let initial_entry_qty = calc_initial_entry_qty(
+    let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
         state_params.balance,
@@ -424,6 +503,9 @@ pub fn calc_trailing_entry_long(
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialLong,
         };
+    } else if position.size < initial_entry_qty {
+        initial_entry_qty = round_(position.size, exchange_params.qty_step)
+            .max(calc_min_entry_qty(initial_entry_price, &exchange_params));
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -431,48 +513,68 @@ pub fn calc_trailing_entry_long(
         position.size,
         position.price,
     );
-    if wallet_exposure > bot_params.wallet_exposure_limit * 0.999 {
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
+    if wallet_exposure > effective_wallet_exposure_limit * 0.999 {
         return Order::default();
     }
+    let threshold_multiplier = if effective_wallet_exposure_limit > 0.0 {
+        (wallet_exposure / effective_wallet_exposure_limit)
+            * bot_params.entry_trailing_threshold_we_weight
+    } else {
+        0.0
+    };
+    let threshold_log_multiplier = state_params.entry_volatility_logrange_ema_1h
+        * bot_params.entry_trailing_threshold_volatility_weight;
+    let threshold_pct = bot_params.entry_trailing_threshold_pct
+        * (1.0 + threshold_multiplier + threshold_log_multiplier).max(0.0);
+
+    let retracement_multiplier = if effective_wallet_exposure_limit > 0.0 {
+        (wallet_exposure / effective_wallet_exposure_limit)
+            * bot_params.entry_trailing_retracement_we_weight
+    } else {
+        0.0
+    };
+    let retracement_log_multiplier = state_params.entry_volatility_logrange_ema_1h
+        * bot_params.entry_trailing_retracement_volatility_weight;
+    let retracement_pct = bot_params.entry_trailing_retracement_pct
+        * (1.0 + retracement_multiplier + retracement_log_multiplier).max(0.0);
     let mut entry_triggered = false;
     let mut reentry_price = 0.0;
-    if bot_params.entry_trailing_threshold_pct <= 0.0 {
+    if threshold_pct <= 0.0 {
         // means trailing entry immediately from pos change
-        if bot_params.entry_trailing_retracement_pct > 0.0
+        if retracement_pct > 0.0
             && trailing_price_bundle.max_since_min
-                > trailing_price_bundle.min_since_open
-                    * (1.0 + bot_params.entry_trailing_retracement_pct)
+                > trailing_price_bundle.min_since_open * (1.0 + retracement_pct)
         {
             entry_triggered = true;
             reentry_price = state_params.order_book.bid;
         }
     } else {
         // means trailing entry will activate only after a threshold
-        if bot_params.entry_trailing_retracement_pct <= 0.0 {
+        if retracement_pct <= 0.0 {
             // close at threshold
             entry_triggered = true;
             reentry_price = f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - bot_params.entry_trailing_threshold_pct),
+                    position.price * (1.0 - threshold_pct),
                     exchange_params.price_step,
                 ),
             );
         } else {
             // enter if both conditions are met
-            if trailing_price_bundle.min_since_open
-                < position.price * (1.0 - bot_params.entry_trailing_threshold_pct)
+            if trailing_price_bundle.min_since_open < position.price * (1.0 - threshold_pct)
                 && trailing_price_bundle.max_since_min
-                    > trailing_price_bundle.min_since_open
-                        * (1.0 + bot_params.entry_trailing_retracement_pct)
+                    > trailing_price_bundle.min_since_open * (1.0 + retracement_pct)
             {
                 entry_triggered = true;
                 reentry_price = f64::min(
                     state_params.order_book.bid,
                     round_dn(
-                        position.price
-                            * (1.0 - bot_params.entry_trailing_threshold_pct
-                                + bot_params.entry_trailing_retracement_pct),
+                        position.price * (1.0 - threshold_pct + retracement_pct),
                         exchange_params.price_step,
                     ),
                 );
@@ -491,12 +593,14 @@ pub fn calc_trailing_entry_long(
             reentry_price,
             state_params.balance,
             position.size,
+            bot_params.entry_trailing_double_down_factor,
             &exchange_params,
             &bot_params,
+            effective_wallet_exposure_limit,
         ),
         initial_entry_qty,
     );
-    let (wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
+    let (_wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
         position,
@@ -504,6 +608,7 @@ pub fn calc_trailing_entry_long(
         state_params.balance,
         reentry_qty,
         reentry_price,
+        effective_wallet_exposure_limit,
     );
     if reentry_qty_cropped < reentry_qty {
         Order {
@@ -525,8 +630,9 @@ pub fn calc_grid_entry_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
+    wallet_exposure_limit_cap: f64,
 ) -> Order {
-    if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
+    if wallet_exposure_limit_with_allowance(bot_params) == 0.0 || state_params.balance <= 0.0 {
         return Order::default();
     }
     let initial_entry_price = calc_ema_price_ask(
@@ -538,7 +644,7 @@ pub fn calc_grid_entry_short(
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
-    let initial_entry_qty = calc_initial_entry_qty(
+    let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
         state_params.balance,
@@ -563,6 +669,9 @@ pub fn calc_grid_entry_short(
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialShort,
         };
+    } else if position_size_abs < initial_entry_qty {
+        initial_entry_qty = round_(position_size_abs, exchange_params.qty_step)
+            .max(calc_min_entry_qty(initial_entry_price, &exchange_params));
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -570,7 +679,11 @@ pub fn calc_grid_entry_short(
         position_size_abs,
         position.price,
     );
-    if wallet_exposure >= bot_params.wallet_exposure_limit * 0.999 {
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
+    if wallet_exposure >= effective_wallet_exposure_limit * 0.999 {
         return Order::default();
     }
 
@@ -581,6 +694,8 @@ pub fn calc_grid_entry_short(
         state_params.order_book.ask,
         exchange_params,
         bot_params,
+        state_params.entry_volatility_logrange_ema_1h,
+        effective_wallet_exposure_limit,
     );
     if reentry_price <= 0.0 {
         return Order::default();
@@ -590,8 +705,10 @@ pub fn calc_grid_entry_short(
             reentry_price,
             state_params.balance,
             position_size_abs,
+            bot_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
+            effective_wallet_exposure_limit,
         ),
         initial_entry_qty,
     );
@@ -603,6 +720,7 @@ pub fn calc_grid_entry_short(
         state_params.balance,
         reentry_qty,
         reentry_price,
+        effective_wallet_exposure_limit,
     );
     if reentry_qty_cropped < reentry_qty {
         return Order {
@@ -625,18 +743,22 @@ pub fn calc_grid_entry_short(
         state_params.order_book.ask,
         exchange_params,
         bot_params,
+        state_params.entry_volatility_logrange_ema_1h,
+        effective_wallet_exposure_limit,
     );
     let next_reentry_qty = f64::max(
         calc_reentry_qty(
             next_reentry_price,
             state_params.balance,
             psize_if_filled,
+            bot_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
+            effective_wallet_exposure_limit,
         ),
         initial_entry_qty,
     );
-    let (next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
+    let (_next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
         &Position {
@@ -647,12 +769,13 @@ pub fn calc_grid_entry_short(
         state_params.balance,
         next_reentry_qty,
         next_reentry_price,
+        effective_wallet_exposure_limit,
     );
     let effective_double_down_factor = next_reentry_qty_cropped / psize_if_filled;
     if effective_double_down_factor < bot_params.entry_grid_double_down_factor * 0.25 {
         // next reentry too small. Inflate current reentry.
         let new_entry_qty = interpolate(
-            bot_params.wallet_exposure_limit,
+            effective_wallet_exposure_limit,
             &[wallet_exposure, wallet_exposure_if_filled],
             &[position_size_abs, position_size_abs + reentry_qty],
         ) - position_size_abs;
@@ -676,6 +799,7 @@ pub fn calc_trailing_entry_short(
     bot_params: &BotParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
+    wallet_exposure_limit_cap: f64,
 ) -> Order {
     let initial_entry_price = calc_ema_price_ask(
         exchange_params.price_step,
@@ -686,7 +810,7 @@ pub fn calc_trailing_entry_short(
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
-    let initial_entry_qty = calc_initial_entry_qty(
+    let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
         state_params.balance,
@@ -712,6 +836,9 @@ pub fn calc_trailing_entry_short(
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialShort,
         };
+    } else if position_size_abs < initial_entry_qty {
+        initial_entry_qty = round_(position_size_abs, exchange_params.qty_step)
+            .max(calc_min_entry_qty(initial_entry_price, &exchange_params));
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -719,48 +846,68 @@ pub fn calc_trailing_entry_short(
         position_size_abs,
         position.price,
     );
-    if wallet_exposure > bot_params.wallet_exposure_limit * 0.999 {
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
+    if wallet_exposure > effective_wallet_exposure_limit * 0.999 {
         return Order::default();
     }
+    let threshold_multiplier = if effective_wallet_exposure_limit > 0.0 {
+        (wallet_exposure / effective_wallet_exposure_limit)
+            * bot_params.entry_trailing_threshold_we_weight
+    } else {
+        0.0
+    };
+    let threshold_log_multiplier = state_params.entry_volatility_logrange_ema_1h
+        * bot_params.entry_trailing_threshold_volatility_weight;
+    let threshold_pct = bot_params.entry_trailing_threshold_pct
+        * (1.0 + threshold_multiplier + threshold_log_multiplier).max(0.0);
+
+    let retracement_multiplier = if effective_wallet_exposure_limit > 0.0 {
+        (wallet_exposure / effective_wallet_exposure_limit)
+            * bot_params.entry_trailing_retracement_we_weight
+    } else {
+        0.0
+    };
+    let retracement_log_multiplier = state_params.entry_volatility_logrange_ema_1h
+        * bot_params.entry_trailing_retracement_volatility_weight;
+    let retracement_pct = bot_params.entry_trailing_retracement_pct
+        * (1.0 + retracement_multiplier + retracement_log_multiplier).max(0.0);
     let mut entry_triggered = false;
     let mut reentry_price = 0.0;
-    if bot_params.entry_trailing_threshold_pct <= 0.0 {
+    if threshold_pct <= 0.0 {
         // means trailing entry immediately from pos change
-        if bot_params.entry_trailing_retracement_pct > 0.0
+        if retracement_pct > 0.0
             && trailing_price_bundle.min_since_max
-                < trailing_price_bundle.max_since_open
-                    * (1.0 - bot_params.entry_trailing_retracement_pct)
+                < trailing_price_bundle.max_since_open * (1.0 - retracement_pct)
         {
             entry_triggered = true;
             reentry_price = state_params.order_book.ask;
         }
     } else {
         // means trailing entry will activate only after a threshold
-        if bot_params.entry_trailing_retracement_pct <= 0.0 {
+        if retracement_pct <= 0.0 {
             // enter at threshold
             entry_triggered = true;
             reentry_price = f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    position.price * (1.0 + bot_params.entry_trailing_threshold_pct),
+                    position.price * (1.0 + threshold_pct),
                     exchange_params.price_step,
                 ),
             );
         } else {
             // enter if both conditions are met
-            if trailing_price_bundle.max_since_open
-                > position.price * (1.0 + bot_params.entry_trailing_threshold_pct)
+            if trailing_price_bundle.max_since_open > position.price * (1.0 + threshold_pct)
                 && trailing_price_bundle.min_since_max
-                    < trailing_price_bundle.max_since_open
-                        * (1.0 - bot_params.entry_trailing_retracement_pct)
+                    < trailing_price_bundle.max_since_open * (1.0 - retracement_pct)
             {
                 entry_triggered = true;
                 reentry_price = f64::max(
                     state_params.order_book.ask,
                     round_up(
-                        position.price
-                            * (1.0 + bot_params.entry_trailing_threshold_pct
-                                - bot_params.entry_trailing_retracement_pct),
+                        position.price * (1.0 + threshold_pct - retracement_pct),
                         exchange_params.price_step,
                     ),
                 );
@@ -779,12 +926,14 @@ pub fn calc_trailing_entry_short(
             reentry_price,
             state_params.balance,
             position_size_abs,
+            bot_params.entry_trailing_double_down_factor,
             &exchange_params,
             &bot_params,
+            effective_wallet_exposure_limit,
         ),
         initial_entry_qty,
     );
-    let (wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
+    let (_wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
         position,
@@ -792,6 +941,7 @@ pub fn calc_trailing_entry_short(
         state_params.balance,
         reentry_qty,
         reentry_price,
+        effective_wallet_exposure_limit,
     );
     if reentry_qty_cropped < reentry_qty {
         Order {
@@ -816,10 +966,12 @@ pub fn calc_next_entry_short(
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     // determines whether trailing or grid order, returns Order
-    if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
+    let base_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
+    if base_wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
         // no orders
         return Order::default();
     }
+    let allowed_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
     if bot_params.entry_trailing_grid_ratio >= 1.0 || bot_params.entry_trailing_grid_ratio <= -1.0 {
         // return trailing only
         return calc_trailing_entry_short(
@@ -828,10 +980,17 @@ pub fn calc_next_entry_short(
             &bot_params,
             &position,
             &trailing_price_bundle,
+            allowed_wallet_exposure_limit,
         );
     } else if bot_params.entry_trailing_grid_ratio == 0.0 {
         // return grid only
-        return calc_grid_entry_short(&exchange_params, &state_params, &bot_params, &position);
+        return calc_grid_entry_short(
+            &exchange_params,
+            &state_params,
+            &bot_params,
+            &position,
+            allowed_wallet_exposure_limit,
+        );
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -839,7 +998,11 @@ pub fn calc_next_entry_short(
         position.size.abs(),
         position.price,
     );
-    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    let wallet_exposure_ratio = if base_wallet_exposure_limit > 0.0 {
+        wallet_exposure / base_wallet_exposure_limit
+    } else {
+        0.0
+    };
     if bot_params.entry_trailing_grid_ratio > 0.0 {
         // trailing first
         if wallet_exposure_ratio < bot_params.entry_trailing_grid_ratio {
@@ -850,42 +1013,53 @@ pub fn calc_next_entry_short(
                     &bot_params,
                     &position,
                     &trailing_price_bundle,
+                    allowed_wallet_exposure_limit,
                 )
             } else {
-                // return trailing order, but crop to max bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio + 1%
-                let mut bot_params_modified = bot_params.clone();
-                bot_params_modified.wallet_exposure_limit =
-                    bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio * 1.01;
+                let wallet_exposure_limit_cap =
+                    (base_wallet_exposure_limit * bot_params.entry_trailing_grid_ratio * 1.01)
+                        .min(allowed_wallet_exposure_limit);
                 calc_trailing_entry_short(
                     &exchange_params,
                     &state_params,
-                    &bot_params_modified,
+                    &bot_params,
                     &position,
                     &trailing_price_bundle,
+                    wallet_exposure_limit_cap,
                 )
             }
         } else {
             // return grid order
-            calc_grid_entry_short(&exchange_params, &state_params, &bot_params, &position)
+            calc_grid_entry_short(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                &position,
+                allowed_wallet_exposure_limit,
+            )
         }
     } else {
         // grid first
         if wallet_exposure_ratio < 1.0 + bot_params.entry_trailing_grid_ratio {
-            // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.entry_trailing_grid_ratio) + 1%
             if wallet_exposure == 0.0 {
-                calc_grid_entry_short(&exchange_params, &state_params, &bot_params, &position)
-            } else {
-                let mut bot_params_modified = bot_params.clone();
-                if wallet_exposure != 0.0 {
-                    bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
-                        * (1.0 + bot_params.entry_trailing_grid_ratio)
-                        * 1.01;
-                }
                 calc_grid_entry_short(
                     &exchange_params,
                     &state_params,
-                    &bot_params_modified,
+                    &bot_params,
                     &position,
+                    allowed_wallet_exposure_limit,
+                )
+            } else {
+                let wallet_exposure_limit_cap = (base_wallet_exposure_limit
+                    * (1.0 + bot_params.entry_trailing_grid_ratio)
+                    * 1.01)
+                    .min(allowed_wallet_exposure_limit);
+                calc_grid_entry_short(
+                    &exchange_params,
+                    &state_params,
+                    &bot_params,
+                    &position,
+                    wallet_exposure_limit_cap,
                 )
             }
         } else {
@@ -895,6 +1069,7 @@ pub fn calc_next_entry_short(
                 &bot_params,
                 &position,
                 &trailing_price_bundle,
+                allowed_wallet_exposure_limit,
             )
         }
     }
@@ -918,12 +1093,24 @@ pub fn calc_entries_long(
         };
         let mut state_params_mod = state_params.clone();
         state_params_mod.order_book.bid = bid;
-        let entry = calc_next_entry_long(
+        let mut entry = calc_next_entry_long(
             exchange_params,
             &state_params_mod,
             bot_params,
             &position_mod,
             &trailing_price_bundle,
+        );
+        entry.price = quantize_price(
+            entry.price,
+            exchange_params.price_step,
+            RoundingMode::Nearest,
+            "calc_entries_long::price",
+        );
+        entry.qty = quantize_qty(
+            entry.qty,
+            exchange_params.qty_step,
+            RoundingMode::Nearest,
+            "calc_entries_long::qty",
         );
         if entry.qty == 0.0 {
             break;
@@ -969,12 +1156,24 @@ pub fn calc_entries_short(
         };
         let mut state_params_mod = state_params.clone();
         state_params_mod.order_book.ask = ask;
-        let entry = calc_next_entry_short(
+        let mut entry = calc_next_entry_short(
             exchange_params,
             &state_params_mod,
             bot_params,
             &position_mod,
             &trailing_price_bundle,
+        );
+        entry.price = quantize_price(
+            entry.price,
+            exchange_params.price_step,
+            RoundingMode::Nearest,
+            "calc_entries_short::price",
+        );
+        entry.qty = quantize_qty(
+            entry.qty,
+            exchange_params.qty_step,
+            RoundingMode::Nearest,
+            "calc_entries_short::qty",
         );
         if entry.qty == 0.0 {
             break;

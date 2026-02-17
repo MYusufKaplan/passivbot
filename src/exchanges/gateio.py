@@ -1,47 +1,25 @@
-from passivbot import Passivbot, logging
-from uuid import uuid4
-import ccxt.pro as ccxt_pro
-import ccxt.async_support as ccxt_async
-import pprint
-import asyncio
-import traceback
-import json
-import numpy as np
-from pure_funcs import (
-    multi_replace,
-    floatify,
-    ts_to_date_utc,
-    calc_hash,
-    shorten_custom_id,
-    coin2symbol,
-    symbol_to_coin,
-)
-from njit_funcs import (
-    calc_diff,
-    round_,
-    round_up,
-    round_dn,
-    round_dynamic,
-    round_dynamic_up,
-    round_dynamic_dn,
-)
-from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
-from sortedcontainers import SortedDict
+from exchanges.ccxt_bot import CCXTBot
+from passivbot import logging
 
-assert_correct_ccxt_version(ccxt=ccxt_async)
+from utils import ts_to_date, utc_ms
+from config_utils import require_live_value
 
 
-class GateIOBot(Passivbot):
+class GateIOBot(CCXTBot):
     def __init__(self, config: dict):
         super().__init__(config)
         self.ohlcvs_1m_init_duration_seconds = (
             120  # gateio has stricter rate limiting on fetching ohlcvs
         )
         self.hedge_mode = False
-        self.max_n_creations_per_batch = 10
-        self.max_n_cancellations_per_batch = 20
+        max_cancel = int(require_live_value(config, "max_n_cancellations_per_batch"))
+        self.config["live"]["max_n_cancellations_per_batch"] = min(max_cancel, 20)
+        max_create = int(require_live_value(config, "max_n_creations_per_batch"))
+        self.config["live"]["max_n_creations_per_batch"] = min(max_create, 10)
+        self.custom_id_max_length = 28
 
     def create_ccxt_sessions(self):
+<<<<<<< HEAD
         self.ccp = getattr(ccxt_pro, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -60,25 +38,19 @@ class GateIOBot(Passivbot):
         )
         self.cca.options["defaultType"] = "swap"
         self.cca.options["unified"] = True  # Enable unified account mode
+=======
+        """GateIO: Add broker header to CCXT config."""
+        super().create_ccxt_sessions()
+        # Add broker header to both clients
+        headers = {"X-Gate-Channel-Id": self.broker_code} if self.broker_code else {}
+        for client in [self.cca, self.ccp]:
+            if client is not None:
+                client.headers.update(headers)
+>>>>>>> upstream/master
 
-    def set_market_specific_settings(self):
-        super().set_market_specific_settings()
-        for symbol in self.markets_dict:
-            elm = self.markets_dict[symbol]
-            self.symbol_ids[symbol] = elm["id"]
-            self.min_costs[symbol] = (
-                0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
-            )
-            self.min_qtys[symbol] = (
-                elm["precision"]["amount"]
-                if elm["limits"]["amount"]["min"] is None
-                else elm["limits"]["amount"]["min"]
-            )
-            self.qty_steps[symbol] = elm["precision"]["amount"]
-            self.price_steps[symbol] = elm["precision"]["price"]
-            self.c_mults[symbol] = elm["contractSize"]
-            self.max_leverage[symbol] = elm["limits"]["leverage"]["max"]
+    # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
+<<<<<<< HEAD
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
         # call some endpoint which includes timestamp for exchange's server
@@ -125,29 +97,23 @@ class GateIOBot(Passivbot):
                 logging.error(f"exception watch_orders {res} {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1)
+=======
+    def _get_position_side_for_order(self, order: dict) -> str:
+        """GateIO: Derive position side from order side + reduceOnly (one-way mode)."""
+        return self.determine_pos_side(order)
+>>>>>>> upstream/master
 
     def determine_pos_side(self, order):
+        """GateIO-specific logic for one-way mode position side derivation."""
         if order["side"] == "buy":
             return "short" if order["reduceOnly"] else "long"
         if order["side"] == "sell":
             return "long" if order["reduceOnly"] else "short"
         raise Exception(f"unsupported order side {order['side']}")
 
-    async def fetch_open_orders(self, symbol: str = None):
-        fetched = None
-        open_orders = []
-        try:
-            fetched = await self.cca.fetch_open_orders()
-            for i in range(len(fetched)):
-                fetched[i]["position_side"] = self.determine_pos_side(fetched[i])
-                fetched[i]["qty"] = fetched[i]["amount"]
-            return sorted(fetched, key=lambda x: x["timestamp"])
-        except Exception as e:
-            logging.error(f"error fetching open orders {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
+    # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
 
+<<<<<<< HEAD
     async def fetch_balance_unified(self):
         """Fetch balance with unified account support"""
         try:
@@ -265,6 +231,39 @@ class GateIOBot(Passivbot):
             limit=n_candles_limit,
         )
         return result
+=======
+    async def determine_utc_offset(self, verbose=True):
+        # returns millis to add to utc to get exchange timestamp
+        # call some endpoint which includes timestamp for exchange's server
+        # GateIO uses fetch_ohlcv for this
+        result = await self.cca.fetch_ohlcv("BTC/USDT:USDT", timeframe="1m")
+        self.utc_offset = round((result[-1][0] - utc_ms()) / (1000 * 60 * 60)) * (1000 * 60 * 60)
+        if verbose:
+            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+
+    async def fetch_balance(self) -> float:
+        """GateIO: Fetch balance with special UID logic for websockets.
+
+        GateIO requires UID for websocket subscriptions, which is obtained
+        from the balance response. Also handles classic vs multi_currency
+        margin modes.
+        """
+        balance_fetched = await self.cca.fetch_balance()
+        if not hasattr(self, "uid") or not self.uid:
+            self.uid = balance_fetched["info"][0]["user"]
+            self.cca.uid = self.uid
+            if self.ccp is not None:
+                self.ccp.uid = self.uid
+        margin_mode_name = balance_fetched["info"][0]["margin_mode_name"]
+        self.log_once(f"account margin mode: {margin_mode_name}")
+        if margin_mode_name == "classic":
+            balance = float(balance_fetched[self.quote]["total"])
+        elif margin_mode_name == "multi_currency":
+            balance = float(balance_fetched["info"][0]["cross_available"])
+        else:
+            raise Exception(f"unknown margin_mode_name {balance_fetched}")
+        return balance
+>>>>>>> upstream/master
 
     async def fetch_pnls(
         self,
@@ -288,136 +287,73 @@ class GateIOBot(Passivbot):
                 break
             if fetched[0]["timestamp"] <= start_time:
                 break
-            logging.info(f"debug fetching pnls {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            logging.debug(f"fetching pnls {ts_to_date(fetched[-1]['timestamp'])}")
             offset += limit
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
+
+    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Return canonical fill events for Gate.io."""
+        events = []
+        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+        for fill in fills:
+            events.append(
+                {
+                    "id": fill.get("id"),
+                    "timestamp": fill.get("timestamp"),
+                    "symbol": fill.get("symbol"),
+                    "side": fill.get("side"),
+                    "position_side": fill.get("position_side"),
+                    "qty": fill.get("amount") or fill.get("filled"),
+                    "price": fill.get("price"),
+                    "pnl": fill.get("pnl"),
+                    "fee": fill.get("fee"),
+                    "info": fill.get("info"),
+                }
+            )
+        return events
 
     async def fetch_pnl(
         self,
         offset=0,
         limit=None,
     ):
-        fetched = None
         n_pnls_limit = 1000 if limit is None else limit
+        fetched = await self.cca.fetch_closed_orders(limit=n_pnls_limit, params={"offset": offset})
+        for i in range(len(fetched)):
+            fetched[i]["pnl"] = float(fetched[i]["info"]["pnl"])
+            fetched[i]["position_side"] = self.determine_pos_side(fetched[i])
+        return sorted(fetched, key=lambda x: x["timestamp"])
+
+    def did_cancel_order(self, executed, order=None):
+        if isinstance(executed, list) and len(executed) == 1:
+            return self.did_cancel_order(executed[0], order)
         try:
-            fetched = await self.cca.fetch_closed_orders(
-                limit=n_pnls_limit, params={"offset": offset}
-            )
-            for i in range(len(fetched)):
-                fetched[i]["pnl"] = float(fetched[i]["info"]["pnl"])
-                fetched[i]["position_side"] = self.determine_pos_side(fetched[i])
-            return sorted(fetched, key=lambda x: x["timestamp"])
-        except Exception as e:
-            logging.error(f"error fetching pnl {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
+            return executed.get("id", "") == order["id"] and executed.get("status", "") == "canceled"
+        except Exception:
             return False
 
-    async def execute_cancellation(self, order: dict) -> dict:
-        return await self.execute_cancellations([order])
-
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if not orders:
-            return []
-        res = None
-        max_n_cancellations_per_batch = min(
-            self.max_n_cancellations_per_batch, self.config["live"]["max_n_cancellations_per_batch"]
-        )
-        try:
-            if len(orders) > max_n_cancellations_per_batch:
-                # prioritize cancelling reduce-only orders
-                try:
-                    reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                    rest = [x for x in orders if not x["reduce_only"]]
-                    orders = (reduce_only_orders + rest)[:max_n_cancellations_per_batch]
-                except Exception as e:
-                    logging.error(f"debug filter cancellations {e}")
-            res = await self.cca.cancel_orders([x["id"] for x in orders])
-            cancellations = []
-            for order, elm in zip(orders, res):
-                if elm["status"] != "rejected":
-                    joined = order.copy()
-                    for k, v in elm.items():
-                        if k not in joined or not joined[k]:
-                            joined[k] = v
-                    cancellations.append(joined)
-            return cancellations
-        except Exception as e:
-            logging.error(f"error executing cancellations {e} {orders}")
-            print_async_exception(res)
-            traceback.print_exc()
-
-    async def execute_order(self, order: dict) -> dict:
-        return await self.execute_orders([order])
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        to_execute = []
-        for order in orders[: self.max_n_creations_per_batch]:
-            order_type = order["type"] if "type" in order else "limit"
-            params = {
-                "reduce_only": order["reduce_only"],
-            }
-            if order_type == "limit":
-                params["timeInForce"] = (
-                    "poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
-                )
-            to_execute.append(
-                {
-                    "symbol": order["symbol"],
-                    "type": order_type,
-                    "side": order["side"],
-                    "amount": order["qty"],
-                    "price": order["price"],
-                    "params": params,
-                }
+    def _build_order_params(self, order: dict) -> dict:
+        order_type = order["type"] if "type" in order else "limit"
+        params = {
+            "reduce_only": order["reduce_only"],
+            "text": order["custom_id"],
+        }
+        if order_type == "limit":
+            params["timeInForce"] = (
+                "poc" if require_live_value(self.config, "time_in_force") == "post_only" else "gtc"
             )
-        res = await self.cca.create_orders(to_execute)
-        executed = []
-        for ex, order in zip(res, orders):
-            if "info" in ex and ex["status"] in ["closed", "open"]:
-                executed.append({**ex, **order})
-        return executed
+        return params
+
+    def did_create_order(self, executed):
+        try:
+            return "status" in executed and executed["status"] != "rejected"
+        except Exception:
+            return False
 
     async def update_exchange_config_by_symbols(self, symbols):
-        return
-        coros_to_call_margin_mode = {}
-        for symbol in symbols:
-            try:
-                params = {
-                    "leverage": int(
-                        min(
-                            self.max_leverage[symbol],
-                            self.live_configs[symbol]["leverage"],
-                        )
-                    )
-                }
-                if self.user_info["is_vault"]:
-                    params["vaultAddress"] = self.user_info["wallet_address"]
-                coros_to_call_margin_mode[symbol] = asyncio.create_task(
-                    self.cca.set_margin_mode("cross", symbol=symbol, params=params)
-                )
-            except Exception as e:
-                logging.error(f"{symbol}: error setting cross mode and leverage {e}")
-        for symbol in symbols:
-            res = None
-            to_print = ""
-            try:
-                res = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode {res}"
-            except Exception as e:
-                if '"code":"59107"' in e.args[0]:
-                    to_print += f" cross mode and leverage: {res} {e}"
-                else:
-                    logging.error(f"{symbol} error setting cross mode {res} {e}")
-            if to_print:
-                logging.info(f"{symbol}: {to_print}")
-
-    async def update_exchange_config(self):
+        """GateIO: No per-symbol configuration needed."""
         pass
 
-    def calc_ideal_orders(self):
-        # hyperliquid needs custom price rounding
-        ideal_orders = super().calc_ideal_orders()
-        return ideal_orders
+    async def update_exchange_config(self):
+        """GateIO: No exchange-level configuration needed."""
+        pass
