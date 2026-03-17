@@ -42,6 +42,12 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
+# Performance optimization imports
+from .argument_pool import ArgumentPool
+from .optimization_config import OptimizationConfig
+from .lazy_pca import LazyPCAVisualizer
+from .task_batcher import IntervalTaskBatcher
+
 
 # Module-level function for multiprocessing (must be picklable)
 def _evaluate_solution_worker(args):
@@ -59,7 +65,8 @@ def _evaluate_solution_worker(args):
     Returns
     -------
     tuple
-        (fitness_tuple, index, bankrupt_flag)
+        (fitness_tuple, index, bankrupt_flag, bankruptcy_reason)
+        bankruptcy_reason: 0=none, 1=financial, 2=drawdown, 3=no_positions, 4=stale_position
     """
     evaluator, ind, showMe, idx = args
     
@@ -78,17 +85,23 @@ def _evaluate_solution_worker(args):
         # If we can't write to log file, just evaluate without logging
         fitness = evaluator.evaluate(ind)
     
+    # Extract bankruptcy_reason from evaluator's last analysis
+    bankruptcy_reason = 0  # 0=none
+    if hasattr(evaluator, 'last_analyses_combined') and evaluator.last_analyses_combined:
+        br = evaluator.last_analyses_combined.get('bankruptcy_reason_mean', 0)
+        bankruptcy_reason = int(br) if br is not None else 0
+    
     # Handle both 2-tuple and 3-tuple returns from evaluator
     # Real evaluator returns (fitness_value, fitness_value, bankrupt_flag)
     # Test evaluator may return (fitness_value, fitness_value)
     if len(fitness) >= 3:
         # Real evaluator: (fitness_val, fitness_val, bankrupt)
         # Return the full fitness tuple (both values) for multi-objective
-        return (fitness[0], fitness[1]), idx, fitness[2]
+        return (fitness[0], fitness[1]), idx, fitness[2], bankruptcy_reason
     else:
         # Test evaluator: (fitness_val, fitness_val)
         # Return the full fitness tuple
-        return fitness, idx, False
+        return fitness, idx, False, 0
 
 def _evaluate_interval_worker(args):
     """
@@ -245,7 +258,7 @@ class DEAPEvolutionaryAlgorithm:
     Requirements: 1.3, 5.1, 5.3
     """
     
-    def __init__(self, n_individuals, dimensions, bounds, options=None):
+    def __init__(self, n_individuals, dimensions, bounds, options=None, optimization_config=None):
         """
         Initialize the DEAP evolutionary algorithm optimizer.
         
@@ -263,8 +276,10 @@ class DEAPEvolutionaryAlgorithm:
             - 'mutpb': Mutation probability (default: 0.2)
             - 'mu': Number of individuals to select (default: n_individuals)
             - 'lambda_': Number of offspring (default: n_individuals)
+        optimization_config : OptimizationConfig, optional
+            Configuration for performance optimizations. If None, uses defaults.
         
-        Requirements: 1.3, 5.1
+        Requirements: 1.2, 1.3, 5.1, 11.1
         """
         self.n_individuals = n_individuals
         self.dimensions = dimensions
@@ -280,6 +295,13 @@ class DEAPEvolutionaryAlgorithm:
             'mu': options.get('mu', n_individuals),
             'lambda_': options.get('lambda_', n_individuals),
         }
+        
+        # Store optimization config (use defaults if not provided)
+        self.optimization_config = optimization_config if optimization_config is not None else OptimizationConfig()
+        
+        # ArgumentPool will be initialized lazily when evaluator is available
+        # This is because we need the evaluator reference for the pool
+        self.argument_pool = None
         
         # Initialize Rich console if available
         if RICH_AVAILABLE:
@@ -428,7 +450,7 @@ class DEAPEvolutionaryAlgorithm:
         tuple
             (best_cost, best_position) - Best fitness value and position found
         
-        Requirements: 1.3, 5.1, 6.1
+        Requirements: 1.2, 1.3, 5.1, 6.1, 11.1
         """
         self.start_time = time.time()
         
@@ -442,6 +464,12 @@ class DEAPEvolutionaryAlgorithm:
         
         if toolbox is None:
             raise ValueError("Toolbox must be provided to optimize method")
+        
+        # Initialize ArgumentPool if enabled and evaluator is provided
+        # Requirements: 1.1, 1.2, 11.1
+        if evaluator is not None and self.optimization_config.enable_argument_pool:
+            self.argument_pool = ArgumentPool(self.n_individuals, evaluator)
+            self.log_message(f"🔧 ArgumentPool initialized with capacity {self.n_individuals}")
         
         # Register the evaluation function in the toolbox
         toolbox.register("evaluate", objective_function)
@@ -468,7 +496,9 @@ class DEAPEvolutionaryAlgorithm:
             file_logging=self.file_logging,
             watch_path=self.watch_path,
             evaluator=evaluator,
-            parameter_bounds=parameter_bounds
+            parameter_bounds=parameter_bounds,
+            argument_pool=self.argument_pool,
+            optimization_config=self.optimization_config
         )
         
         # Extract best individual
@@ -924,7 +954,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
                    checkpoint_path="deap_checkpoint.pkl", checkpoint_interval=5,
                    console=None, console_logging=True, file_logging=True,
                    watch_path="logs/evaluation.log", evaluator=None, parameter_bounds=None,
-                   stagnation_config=None, intervals=None):
+                   stagnation_config=None, intervals=None, argument_pool=None, optimization_config=None):
     """
     This is a simplified (μ+λ) evolutionary algorithm implementation with stagnation detection.
     
@@ -978,6 +1008,12 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
     intervals : list of MonthlyInterval, optional
         List of monthly intervals for interval-based evaluation.
         If None, uses legacy single-evaluation mode.
+    argument_pool : ArgumentPool, optional
+        Pre-allocated argument pool for multiprocessing evaluation.
+        If provided and optimization_config.enable_argument_pool is True,
+        reuses argument containers instead of creating new tuples.
+    optimization_config : OptimizationConfig, optional
+        Configuration for performance optimizations.
     
     Returns
     -------
@@ -995,7 +1031,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
     The algorithm uses elitism by always preserving the best individual from
     the combined parent and offspring populations.
     
-    Requirements: 1.2, 6.1, 6.3, 7.3, 8.1, 8.2
+    Requirements: 1.2, 6.1, 6.3, 7.3, 8.1, 8.2, 11.1
     """
     start_time = time.time()
     logbook = tools.Logbook()
@@ -1023,6 +1059,65 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
         'pca_grid_height': stagnation_config.get('pca_grid_height', 31),
         'pca_graphs_path': stagnation_config.get('pca_graphs_path', 'logs/graphs.log')
     }
+    
+    # Set up dynamic population configuration
+    dynamic_pop_config = stagnation_config.get('dynamic_population', {})
+    dynamic_pop_cfg = {
+        'enabled': dynamic_pop_config.get('enabled', False),
+        'continuous': dynamic_pop_config.get('continuous', False),
+        'pop_max': dynamic_pop_config.get('pop_max', mu),
+        'pop_min': dynamic_pop_config.get('pop_min', mu),
+        'std_max': dynamic_pop_config.get('std_max', 0.1),
+        'std_min': dynamic_pop_config.get('std_min', 1e-4),
+        'shrink_steps': dynamic_pop_config.get('shrink_steps', [
+            {"fitness_std_above": 0.01, "pop_ratio": 1.0},
+            {"fitness_std_above": 0.001, "pop_ratio": 0.5},
+            {"fitness_std_above": 0.0001, "pop_ratio": 0.2},
+            {"fitness_std_above": 0.0, "pop_ratio": 0.05}
+        ])
+    }
+    
+    # Sort shrink_steps by fitness_std_above in descending order for proper threshold matching
+    dynamic_pop_cfg['shrink_steps'] = sorted(
+        dynamic_pop_cfg['shrink_steps'], 
+        key=lambda x: x['fitness_std_above'], 
+        reverse=True
+    )
+    
+    # Track current population size
+    current_pop_size = dynamic_pop_cfg['pop_max'] if dynamic_pop_cfg['enabled'] else mu
+    
+    def calculate_target_pop_size(fitness_std):
+        """Calculate target population size based on fitness std and config."""
+        if not dynamic_pop_cfg['enabled']:
+            return mu
+        
+        pop_max = dynamic_pop_cfg['pop_max']
+        pop_min = dynamic_pop_cfg['pop_min']
+        
+        # Continuous mode: linear interpolation between std_max and std_min
+        if dynamic_pop_cfg.get('continuous'):
+            std_max = dynamic_pop_cfg.get('std_max', 0.1)
+            std_min = dynamic_pop_cfg.get('std_min', 1e-4)
+            
+            if fitness_std >= std_max:
+                return pop_max
+            if fitness_std <= std_min:
+                return pop_min
+            
+            # Linear interpolation
+            ratio = (fitness_std - std_min) / (std_max - std_min)
+            target = int(pop_min + ratio * (pop_max - pop_min))
+            return target
+        
+        # Step-based mode (original logic)
+        for step in dynamic_pop_cfg['shrink_steps']:
+            if fitness_std >= step['fitness_std_above']:
+                target = int(pop_max * step['pop_ratio'])
+                return max(pop_min, min(pop_max, target))
+        
+        # Default to pop_min if no threshold matched
+        return pop_min
     
     # Helper function for logging with Rich
     def log_message(message, emoji=None, panel=False, timestamp=True):
@@ -1117,7 +1212,8 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
                 # Use multiprocessing evaluation with existing infrastructure
                 # Use infinity as global best since we're just starting
                 fitnesses = _evaluate_population_parallel(
-                    invalid_ind, evaluator, pool, console, watch_path, file_logging, float('inf'), intervals
+                    invalid_ind, evaluator, pool, console, watch_path, file_logging, float('inf'), intervals,
+                    argument_pool=argument_pool, optimization_config=optimization_config
                 )
             else:
                 # Use standard DEAP evaluation
@@ -1142,7 +1238,8 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
             # Use multiprocessing evaluation with existing infrastructure
             # Use infinity as global best since we're just starting
             fitnesses = _evaluate_population_parallel(
-                invalid_ind, evaluator, pool, console, watch_path, file_logging, float('inf'), intervals
+                invalid_ind, evaluator, pool, console, watch_path, file_logging, float('inf'), intervals,
+                argument_pool=argument_pool, optimization_config=optimization_config
             )
         else:
             # Use standard DEAP evaluation
@@ -1229,12 +1326,29 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
         parameter_bounds,
         epsilon_geom=1e-6,
         epsilon_mid=1e-4,
+        epsilon_fitness_std=1e-5,  # Fitness variance collapse threshold
         stagnation_window=30
     )
     restart_count = 0  # Track number of LHS restarts
+    gens_since_last_restart = start_gen  # Track generations since last restart
     
     # Initialize PCA visualization state
     pca_state = None
+    
+    # Initialize LazyPCAVisualizer if enabled
+    # Requirements: 2.1, 11.1
+    lazy_pca_visualizer = None
+    if optimization_config is not None and optimization_config.enable_lazy_pca:
+        lazy_pca_visualizer = LazyPCAVisualizer(
+            interval=optimization_config.pca_interval,
+            enabled=stag_cfg['pca_visualization_enabled'],
+            trigger_on_new_best=optimization_config.pca_on_new_best
+        )
+        log_message(
+            f"🎨 LazyPCAVisualizer initialized (interval={optimization_config.pca_interval}, "
+            f"trigger_on_new_best={optimization_config.pca_on_new_best})",
+            emoji="📊"
+        )
     
     # Save initial checkpoint if starting fresh
     if start_gen == 0 and checkpoint_path:
@@ -1257,6 +1371,26 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
     
     log_message(f"Starting Generational Loop", emoji="🧬")
     
+    # Log dynamic population config if enabled
+    if dynamic_pop_cfg['enabled']:
+        log_message(
+            f"📊 Dynamic population enabled: {dynamic_pop_cfg['pop_max']} → {dynamic_pop_cfg['pop_min']}",
+            emoji="👥"
+        )
+        if dynamic_pop_cfg.get('continuous'):
+            std_max = dynamic_pop_cfg.get('std_max', 0.1)
+            std_min = dynamic_pop_cfg.get('std_min', 1e-4)
+            log_message(
+                f"   Continuous mode: linear scaling from std={std_max:.0e} (pop={dynamic_pop_cfg['pop_max']}) to std={std_min:.0e} (pop={dynamic_pop_cfg['pop_min']})",
+                emoji="📉"
+            )
+        else:
+            for step in dynamic_pop_cfg['shrink_steps']:
+                log_message(
+                    f"   fitness_std >= {step['fitness_std_above']:.0e} → pop = {int(dynamic_pop_cfg['pop_max'] * step['pop_ratio'])}",
+                    emoji="📉"
+                )
+    
     # Begin the generational process
     for gen in range(start_gen + 1, ngen + 1):
         gen_start_time = time.time()
@@ -1268,8 +1402,30 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
                 console, file_logging, watch_path
             )
         
-        # Vary the population
-        offspring = varOr(population, toolbox, lambda_, cxpb, mutpb)
+        # Dynamic population sizing: calculate target pop based on fitness std
+        if dynamic_pop_cfg['enabled'] and len(population) > 0:
+            # Calculate fitness std from current population
+            fitness_values = [ind.fitness.values[0] for ind in population if ind.fitness.valid]
+            if fitness_values:
+                current_fitness_std = np.std(fitness_values)
+                target_pop_size = calculate_target_pop_size(current_fitness_std)
+                
+                # Shrink population if needed using DEAP's selBest
+                if target_pop_size < len(population):
+                    old_size = len(population)
+                    population[:] = tools.selBest(population, target_pop_size)
+                    current_pop_size = len(population)
+                    log_message(
+                        f"📉 Population shrunk: {old_size} → {current_pop_size} (fitness_std={current_fitness_std:.2e})",
+                        emoji="👥"
+                    )
+            else:
+                target_pop_size = current_pop_size
+        else:
+            target_pop_size = mu
+        
+        # Vary the population - generate offspring matching current target size
+        offspring = varOr(population, toolbox, target_pop_size, cxpb, mutpb)
         
         # Evaluate the individuals with an invalid fitness (including new population after replacement)
         invalid_ind = [ind for ind in population + offspring if not ind.fitness.valid]
@@ -1277,7 +1433,8 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
         if evaluator is not None and pool is not None:
             # Use multiprocessing evaluation with existing infrastructure
             fitnesses = _evaluate_population_parallel(
-                invalid_ind, evaluator, pool, console, watch_path, file_logging, global_best_fitness, intervals
+                invalid_ind, evaluator, pool, console, watch_path, file_logging, global_best_fitness, intervals,
+                argument_pool=argument_pool, optimization_config=optimization_config
             )
         else:
             # Use standard DEAP evaluation
@@ -1306,8 +1463,13 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
         current_best_fitness = best_ind.fitness.values[0]
         improvement_threshold = 1e-8  # Minimum improvement to count as progress
         
+        # Track if new global best found this generation (for lazy PCA)
+        # Requirements: 2.3
+        new_global_best_found = False
+        
         # Update global best if improved
         if current_best_fitness < global_best_fitness - improvement_threshold:
+            new_global_best_found = True
             improvement = global_best_fitness - current_best_fitness
             global_best_fitness = current_best_fitness
             global_best_individual = toolbox.clone(best_ind)  # Keep separate copy
@@ -1380,15 +1542,19 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
             except Exception as e:
                 log_message(f"⚠️ Failed to evaluate global best: {e}")
         
+        # Get fitness values for convergence check
+        fitness_values_for_conv = [ind.fitness.values[0] for ind in population if ind.fitness.valid]
+        
         # Check for convergence/stagnation using covariance eigenvalues
         should_terminate, should_restart, convergence_reason = update_convergence_state(
-            population, current_best_fitness, convergence_state
+            population, current_best_fitness, convergence_state, fitness_values_for_conv
         )
         
         conv_metrics = get_convergence_log_dict(convergence_state)
         
         if should_restart:
             restart_count += 1
+            gens_since_last_restart = 0  # Reset counter on restart
             log_message(
                 f"🔄 RESTART #{restart_count}: {convergence_reason}",
                 emoji="⚠️",
@@ -1399,6 +1565,25 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
                 f"active_dims={conv_metrics['active_dims']}, Δfit={conv_metrics['delta_fitness']:.2e}",
                 emoji="📊"
             )
+            
+            # Save neutrality snapshot for later analysis
+            try:
+                from deap_optimizer.convergence import save_neutrality_snapshot
+                fitness_std_for_snapshot = np.std(fitness_values_for_conv) if fitness_values_for_conv else 0.0
+                # Use fixed path in deap_optimizer folder for centralized analysis
+                snapshot_path = os.path.join(os.path.dirname(__file__), "neutrality_snapshots.json")
+                save_neutrality_snapshot(
+                    state=convergence_state,
+                    population=population,
+                    fitness_std=fitness_std_for_snapshot,
+                    restart_reason=convergence_reason,
+                    output_path=snapshot_path,
+                    generation=gen,
+                    global_best_fitness=global_best_fitness
+                )
+                log_message(f"📸 Saved neutrality snapshot to {snapshot_path}", emoji="💾")
+            except Exception as e:
+                log_message(f"⚠️ Failed to save neutrality snapshot: {e}", emoji="⚠️")
             
             # Create entirely new population using LHS for better coverage
             try:
@@ -1421,28 +1606,33 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
                     variable_lower = np.array([list(parameter_bounds.values())[i][0] for i in variable_indices])
                     variable_upper = np.array([list(parameter_bounds.values())[i][1] for i in variable_indices])
                     
+                    # Use pop_max on restart if dynamic population is enabled
+                    restart_pop_size = dynamic_pop_cfg['pop_max'] if dynamic_pop_cfg['enabled'] else mu
+                    
                     sampler = qmc.LatinHypercube(d=len(variable_indices), seed=np.random.randint(0, 2**31))
-                    unit_samples = sampler.random(n=mu)
+                    unit_samples = sampler.random(n=restart_pop_size)
                     variable_samples = qmc.scale(unit_samples, variable_lower, variable_upper)
                     
                     # Reconstruct full samples with fixed values
-                    full_samples = np.zeros((mu, len(parameter_bounds)))
+                    full_samples = np.zeros((restart_pop_size, len(parameter_bounds)))
                     for j, var_idx in enumerate(variable_indices):
                         full_samples[:, var_idx] = variable_samples[:, j]
                     for j, fix_idx in enumerate(fixed_indices):
                         full_samples[:, fix_idx] = fixed_values[j]
                     
                     new_population = [creator.Individual(list(sample)) for sample in full_samples]
-                    log_message(f"✨ Created {mu} new individuals using LHS ({len(variable_indices)} variable params)", emoji="🌱")
+                    log_message(f"✨ Created {restart_pop_size} new individuals using LHS ({len(variable_indices)} variable params)", emoji="🌱")
                 else:
                     # All parameters fixed
+                    restart_pop_size = dynamic_pop_cfg['pop_max'] if dynamic_pop_cfg['enabled'] else mu
                     fixed_individual = [list(parameter_bounds.values())[i][0] for i in range(len(parameter_bounds))]
-                    new_population = [creator.Individual(list(fixed_individual)) for _ in range(mu)]
-                    log_message(f"✨ All parameters fixed, created {mu} identical individuals", emoji="🌱")
+                    new_population = [creator.Individual(list(fixed_individual)) for _ in range(restart_pop_size)]
+                    log_message(f"✨ All parameters fixed, created {restart_pop_size} identical individuals", emoji="🌱")
                     
             except ImportError:
                 log_message("⚠️ scipy not available, using random sampling", emoji="⚠️")
-                new_population = [toolbox.individual() for _ in range(mu)]
+                restart_pop_size = dynamic_pop_cfg['pop_max'] if dynamic_pop_cfg['enabled'] else mu
+                new_population = [toolbox.individual() for _ in range(restart_pop_size)]
             
             # Invalidate fitness for all new individuals
             for ind in new_population:
@@ -1450,6 +1640,9 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
             
             # Replace the entire population
             population[:] = new_population
+            
+            # Reset current_pop_size to pop_max on restart
+            current_pop_size = dynamic_pop_cfg['pop_max'] if dynamic_pop_cfg['enabled'] else mu
             
             # Reset convergence state history for fresh start
             convergence_state.best_fitness_history.clear()
@@ -1465,10 +1658,13 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
             )
         else:
             # Normal selection: best individual from combined population always survives
-            selected = toolbox.select(population + offspring, mu - 1)
+            # Use target_pop_size for dynamic population, otherwise mu
+            selection_size = target_pop_size if dynamic_pop_cfg['enabled'] else mu
+            selected = toolbox.select(population + offspring, selection_size - 1)
             population[:] = selected + [best_ind]
             
             log_message(f"Elite preserved with fitness: {best_ind.fitness.values[0]:.6e}", emoji="🏅")
+            gens_since_last_restart += 1  # Increment counter each generation
         
         # Append the current generation statistics to the logbook
         record = stats.compile(population) if stats is not None else {}
@@ -1494,18 +1690,44 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
             # Get convergence metrics
             conv_metrics = get_convergence_log_dict(convergence_state)
             
+            # Format active/collapsed params for logging
+            # Active params = still spread out in population (high variance)
+            # Collapsed params = converged to similar values (low variance)
+            # When fitness std is low but active params exist, those are "neutral" params
+            # that don't affect fitness - the optimizer is exploring them but they don't matter
+            active_params = conv_metrics.get('active_params', [])
+            collapsed_params = conv_metrics.get('collapsed_params', [])
+            n_active = len(active_params)
+            n_collapsed = len(collapsed_params)
+            
+            # Show up to 5 params in each category, truncate if more
+            active_str = ", ".join(active_params[:5])
+            if len(active_params) > 5:
+                active_str += f", ... (+{len(active_params) - 5} more)"
+            collapsed_str = ", ".join(collapsed_params[:5])
+            if len(collapsed_params) > 5:
+                collapsed_str += f", ... (+{len(collapsed_params) - 5} more)"
+            
+            # Build population size info for dynamic population
+            pop_size_str = f"👥 Population: {len(population)}"
+            if dynamic_pop_cfg['enabled']:
+                pop_size_str += f" (max={dynamic_pop_cfg['pop_max']}, min={dynamic_pop_cfg['pop_min']})"
+            
             # Build status message with convergence metrics
             status_msg = f"""🌟 Gen {gen}
                 🧬 Gen Best: {gen_best_fitness:.6e}
                 🏆 Global Best: {global_best_fitness:.6e}
                 ⏳ Gens since global best: {gens_since_global_best}
-                🔄 Restarts: {restart_count}
+                🔄 Restarts: {restart_count} (gens since last: {gens_since_last_restart})
+                {pop_size_str}
                 📊 Mean fitness: {mean_fitness:.6e}
                 👎 Worst fitness: {worst_fitness:.6e}
                 📉 Fitness std dev: {std_fitness:.6e}
                 🎯 λ_max: {conv_metrics['lambda_max']:.2e} (ε_geom={convergence_state.epsilon_geom:.0e}, ε_mid={convergence_state.epsilon_mid:.0e})
                 📐 Active dims: {conv_metrics['active_dims']}
                 📈 Δ fitness: {conv_metrics['delta_fitness']:.2e}
+                🔍 Still exploring ({n_active}): {active_str if active_str else "none"}
+                ✅ Converged ({n_collapsed}): {collapsed_str if collapsed_str else "none"}
                 ⏱️ Generation time: {gen_time:.2f} sec / {(gen_time/60):.2f} min
                 📆 Avg gen time: {avg_gen_time:.2f} sec / {(avg_gen_time/60):.2f} min"""
             
@@ -1604,19 +1826,36 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
             # Advanced stagnation injection disabled - using simple LHS recreation instead
             # The tracking above is kept for PCA visualization purposes
         
-        # PCA Visualization (create every generation)
+        # PCA Visualization
+        # Requirements: 2.1, 11.1
         if stag_cfg['pca_visualization_enabled']:
             if SKLEARN_AVAILABLE and console is not None:
-                pca_state = create_pca_visualization_deap(
-                    population=population,
-                    halloffame=halloffame,
-                    generation=gen,
-                    console=console,
-                    watch_path=stag_cfg['pca_graphs_path'],
-                    pca_state=pca_state,
-                    grid_width=stag_cfg['pca_grid_width'],
-                    grid_height=stag_cfg['pca_grid_height']
-                )
+                # Use LazyPCAVisualizer if enabled, otherwise fall back to direct call
+                if lazy_pca_visualizer is not None:
+                    # Use lazy PCA visualization with configurable intervals
+                    pca_state = lazy_pca_visualizer.visualize(
+                        population=population,
+                        halloffame=halloffame,
+                        generation=gen,
+                        console=console,
+                        watch_path=stag_cfg['pca_graphs_path'],
+                        new_global_best=new_global_best_found,
+                        pca_visualization_func=create_pca_visualization_deap,
+                        grid_width=stag_cfg['pca_grid_width'],
+                        grid_height=stag_cfg['pca_grid_height']
+                    )
+                else:
+                    # Fall back to direct PCA call (original behavior)
+                    pca_state = create_pca_visualization_deap(
+                        population=population,
+                        halloffame=halloffame,
+                        generation=gen,
+                        console=console,
+                        watch_path=stag_cfg['pca_graphs_path'],
+                        pca_state=pca_state,
+                        grid_width=stag_cfg['pca_grid_width'],
+                        grid_height=stag_cfg['pca_grid_height']
+                    )
             elif not SKLEARN_AVAILABLE and gen == 1:
                 log_message("⚠️ sklearn not available, PCA visualization disabled", emoji="⚠️")
             elif console is None and gen == 1:
@@ -1692,7 +1931,7 @@ def _console_wrapper(msg, console, file_logging, watch_path):
 
 
 
-def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_path, file_logging, global_best=float('inf'), intervals=None):
+def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_path, file_logging, global_best=float('inf'), intervals=None, argument_pool=None, optimization_config=None):
     """
     Evaluate a population of individuals using multiprocessing.
 
@@ -1721,13 +1960,18 @@ def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_p
     intervals : list of MonthlyInterval, optional
         List of monthly intervals for interval-based evaluation.
         If None, uses legacy single-evaluation mode.
+    argument_pool : ArgumentPool, optional
+        Pre-allocated argument pool for multiprocessing evaluation.
+        If provided and optimization enabled, reuses argument containers.
+    optimization_config : OptimizationConfig, optional
+        Configuration for performance optimizations.
 
     Returns
     -------
     list
         List of fitness tuples (one per individual)
 
-    Requirements: 6.1, 6.3, 7.1, 7.2, 7.3, 8.1, 8.2, 8.4
+    Requirements: 1.2, 3.1, 6.1, 6.3, 7.1, 7.2, 7.3, 8.1, 8.2, 8.4, 11.1
     """
     import contextlib
     from rich.progress import (
@@ -1744,8 +1988,22 @@ def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_p
     if intervals is not None:
         from deap_optimizer.interval import build_interval_task_pool, compute_monthly_fitness
 
-        # Build task pool: (evaluator, individual, month_id, interval, candidate_id)
-        all_args = build_interval_task_pool(individuals, intervals, evaluator)
+        # Check if task batching is enabled (Requirements: 3.1, 11.1)
+        use_task_batching = (
+            optimization_config is not None and 
+            optimization_config.enable_task_batching
+        )
+        
+        if use_task_batching:
+            # Use IntervalTaskBatcher for grouped task submission (Requirement 3.1)
+            batch_size = optimization_config.task_batch_size if optimization_config else 50
+            task_batcher = IntervalTaskBatcher(batch_size=batch_size)
+            # Build task list grouped by individual for better cache locality
+            all_args = task_batcher.build_task_list(individuals, intervals, evaluator)
+        else:
+            # Fall back to original flat task pool (original behavior)
+            all_args = build_interval_task_pool(individuals, intervals, evaluator)
+        
         total_tasks = len(all_args)
         total_months = len(intervals)
         total_candidates = len(individuals)
@@ -1787,76 +2045,156 @@ def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_p
                     candidate_gains = {i: [] for i in range(total_candidates)}
 
                     task = progress.add_task(
-                        f"🧬 ✅0 😴0 🕰️0 💸0 📉0 | Tasks: 0/{total_tasks} | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}",
+                        f"🧬 ✅0 😴0 📌0 💀0 💸0 | Tasks: 0/{total_tasks} | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}",
                         total=total_tasks
                     )
 
-                    for result in pool.imap_unordered(_evaluate_interval_worker, all_args):
-                        candidate_id, month_id, fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps, gain = result
+                    # Use chunked submission when task batching is enabled (Requirement 3.2)
+                    if use_task_batching:
+                        # Process tasks in chunks for reduced pool overhead
+                        chunk_boundaries = task_batcher.get_chunk_boundaries(total_tasks)
+                        for chunk_start, chunk_end in chunk_boundaries:
+                            chunk = all_args[chunk_start:chunk_end]
+                            for result in pool.imap_unordered(_evaluate_interval_worker, chunk):
+                                candidate_id, month_id, fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps, gain = result
 
-                        # Store result (without gain, for fitness computation)
-                        candidate_results[candidate_id][month_id] = (
-                            fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps
-                        )
-                        # Store gain separately
-                        candidate_gains[candidate_id].append(gain)
+                                # Store result (without gain, for fitness computation)
+                                candidate_results[candidate_id][month_id] = (
+                                    fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps
+                                )
+                                # Store gain separately
+                                candidate_gains[candidate_id].append(gain)
 
-                        # Track if this candidate has any bankruptcy and its reason
-                        if bankruptcy_flag:
-                            candidate_has_bankruptcy[candidate_id] = True
-                            # Store first bankruptcy reason encountered
-                            if candidate_bankruptcy_reason[candidate_id] == 0:
-                                candidate_bankruptcy_reason[candidate_id] = bankruptcy_reason
+                                # Track if this candidate has any bankruptcy and its reason
+                                if bankruptcy_flag:
+                                    candidate_has_bankruptcy[candidate_id] = True
+                                    # Store first bankruptcy reason encountered
+                                    if candidate_bankruptcy_reason[candidate_id] == 0:
+                                        candidate_bankruptcy_reason[candidate_id] = bankruptcy_reason
 
-                        completed_tasks += 1
+                                completed_tasks += 1
 
-                        # Check if this candidate is now complete
-                        if len(candidate_results[candidate_id]) == total_months and candidate_id not in completed_candidates:
-                            # Mark as complete with bankruptcy status
-                            completed_candidates[candidate_id] = candidate_has_bankruptcy[candidate_id]
-                            completed_bankruptcy_reasons[candidate_id] = candidate_bankruptcy_reason[candidate_id]
-                            
-                            # Compute this candidate's fitness to update generational best
-                            results = candidate_results[candidate_id]
-                            fitness_tuple = compute_monthly_fitness(results, total_months)
-                            if fitness_tuple[0] < generational_best:
-                                generational_best = fitness_tuple[0]
+                                # Check if this candidate is now complete
+                                if len(candidate_results[candidate_id]) == total_months and candidate_id not in completed_candidates:
+                                    # Mark as complete with bankruptcy status
+                                    completed_candidates[candidate_id] = candidate_has_bankruptcy[candidate_id]
+                                    completed_bankruptcy_reasons[candidate_id] = candidate_bankruptcy_reason[candidate_id]
+                                    
+                                    # Compute this candidate's fitness to update generational best
+                                    results = candidate_results[candidate_id]
+                                    fitness_tuple = compute_monthly_fitness(results, total_months)
+                                    if fitness_tuple[0] < generational_best:
+                                        generational_best = fitness_tuple[0]
 
-                        # Count passed vs bankrupt candidates by reason
-                        passed_count = sum(1 for is_bankrupt in completed_candidates.values() if not is_bankrupt)
-                        # Count by bankruptcy reason: 1=financial(💸), 2=drawdown(📉), 3=no_positions(😴), 4=stale_position(🕰️)
-                        no_pos_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 3)
-                        stale_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 4)
-                        financial_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 1)
-                        drawdown_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 2)
+                                # Count passed vs bankrupt candidates by reason
+                                passed_count = sum(1 for is_bankrupt in completed_candidates.values() if not is_bankrupt)
+                                # Count by bankruptcy reason: 1=financial(💸), 2=drawdown(📉), 3=no_positions(😴), 4=stale_position(🕰️)
+                                no_pos_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 3)
+                                stale_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 4)
+                                financial_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 1)
+                                drawdown_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 2)
 
-                        # Use flame emoji when gen best beats global best
-                        emoji = "🧬" if generational_best >= global_best else "🔥"
+                                # Use flame emoji when gen best beats global best
+                                emoji = "🧬" if generational_best >= global_best else "🔥"
 
-                        progress.update(
-                            task,
-                            advance=1,
-                            description=f"{emoji} ✅{passed_count} 😴{no_pos_count} 🕰️{stale_count} 💸{financial_count} 📉{drawdown_count} | Tasks: {completed_tasks}/{total_tasks} | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}"
-                        )
+                                progress.update(
+                                    task,
+                                    advance=1,
+                                    description=f"{emoji} ✅{passed_count} 😴{no_pos_count} 📌{stale_count} 💀{drawdown_count} 💸{financial_count} | Tasks: {completed_tasks}/{total_tasks} | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}"
+                                )
+                    else:
+                        # Original behavior: process all tasks at once
+                        for result in pool.imap_unordered(_evaluate_interval_worker, all_args):
+                            candidate_id, month_id, fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps, gain = result
+
+                            # Store result (without gain, for fitness computation)
+                            candidate_results[candidate_id][month_id] = (
+                                fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps
+                            )
+                            # Store gain separately
+                            candidate_gains[candidate_id].append(gain)
+
+                            # Track if this candidate has any bankruptcy and its reason
+                            if bankruptcy_flag:
+                                candidate_has_bankruptcy[candidate_id] = True
+                                # Store first bankruptcy reason encountered
+                                if candidate_bankruptcy_reason[candidate_id] == 0:
+                                    candidate_bankruptcy_reason[candidate_id] = bankruptcy_reason
+
+                            completed_tasks += 1
+
+                            # Check if this candidate is now complete
+                            if len(candidate_results[candidate_id]) == total_months and candidate_id not in completed_candidates:
+                                # Mark as complete with bankruptcy status
+                                completed_candidates[candidate_id] = candidate_has_bankruptcy[candidate_id]
+                                completed_bankruptcy_reasons[candidate_id] = candidate_bankruptcy_reason[candidate_id]
+                                
+                                # Compute this candidate's fitness to update generational best
+                                results = candidate_results[candidate_id]
+                                fitness_tuple = compute_monthly_fitness(results, total_months)
+                                if fitness_tuple[0] < generational_best:
+                                    generational_best = fitness_tuple[0]
+
+                            # Count passed vs bankrupt candidates by reason
+                            passed_count = sum(1 for is_bankrupt in completed_candidates.values() if not is_bankrupt)
+                            # Count by bankruptcy reason: 1=financial(💸), 2=drawdown(📉), 3=no_positions(😴), 4=stale_position(🕰️)
+                            no_pos_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 3)
+                            stale_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 4)
+                            financial_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 1)
+                            drawdown_count = sum(1 for cid, reason in completed_bankruptcy_reasons.items() if completed_candidates.get(cid, False) and reason == 2)
+
+                            # Use flame emoji when gen best beats global best
+                            emoji = "🧬" if generational_best >= global_best else "🔥"
+
+                            progress.update(
+                                task,
+                                advance=1,
+                                description=f"{emoji} ✅{passed_count} 😴{no_pos_count} 📌{stale_count} 💀{drawdown_count} 💸{financial_count} | Tasks: {completed_tasks}/{total_tasks} | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}"
+                            )
         else:
             # Fallback without progress bar
             candidate_has_bankruptcy = {i: False for i in range(total_candidates)}
             candidate_bankruptcy_reason = {i: 0 for i in range(total_candidates)}
             candidate_gains = {i: [] for i in range(total_candidates)}
-            for result in pool.imap_unordered(_evaluate_interval_worker, all_args):
-                candidate_id, month_id, fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps, gain = result
-                candidate_results[candidate_id][month_id] = (
-                    fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps
-                )
-                candidate_gains[candidate_id].append(gain)
-                if bankruptcy_flag:
-                    candidate_has_bankruptcy[candidate_id] = True
-                    if candidate_bankruptcy_reason[candidate_id] == 0:
-                        candidate_bankruptcy_reason[candidate_id] = bankruptcy_reason
+            
+            # Use chunked submission when task batching is enabled (Requirement 3.2)
+            if use_task_batching:
+                chunk_boundaries = task_batcher.get_chunk_boundaries(total_tasks)
+                for chunk_start, chunk_end in chunk_boundaries:
+                    chunk = all_args[chunk_start:chunk_end]
+                    for result in pool.imap_unordered(_evaluate_interval_worker, chunk):
+                        candidate_id, month_id, fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps, gain = result
+                        candidate_results[candidate_id][month_id] = (
+                            fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps
+                        )
+                        candidate_gains[candidate_id].append(gain)
+                        if bankruptcy_flag:
+                            candidate_has_bankruptcy[candidate_id] = True
+                            if candidate_bankruptcy_reason[candidate_id] == 0:
+                                candidate_bankruptcy_reason[candidate_id] = bankruptcy_reason
+            else:
+                # Original behavior: process all tasks at once
+                for result in pool.imap_unordered(_evaluate_interval_worker, all_args):
+                    candidate_id, month_id, fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps, gain = result
+                    candidate_results[candidate_id][month_id] = (
+                        fitness_value, bankruptcy_flag, bankruptcy_reason, bankruptcy_timestep, total_timesteps
+                    )
+                    candidate_gains[candidate_id].append(gain)
+                    if bankruptcy_flag:
+                        candidate_has_bankruptcy[candidate_id] = True
+                        if candidate_bankruptcy_reason[candidate_id] == 0:
+                            candidate_bankruptcy_reason[candidate_id] = bankruptcy_reason
 
         # Aggregate results for each candidate and log non-bankrupt ones
         fitness_results = []
         log_path = "logs/evaluation_output.log"
+        
+        # Count final bankruptcy stats for summary
+        final_passed = 0
+        final_no_pos = 0
+        final_stale = 0
+        final_financial = 0
+        final_drawdown = 0
         
         for candidate_id in range(len(individuals)):
             results = candidate_results[candidate_id]
@@ -1865,6 +2203,21 @@ def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_p
             
             # Check if candidate had any bankruptcy
             has_bankruptcy = any(r[1] for r in results.values())  # r[1] is bankruptcy_flag
+            
+            # Count by bankruptcy reason for summary
+            if not has_bankruptcy:
+                final_passed += 1
+            else:
+                # Get first bankruptcy reason for this candidate
+                reason = candidate_bankruptcy_reason.get(candidate_id, 0)
+                if reason == 3:  # no_positions
+                    final_no_pos += 1
+                elif reason == 4:  # stale_position
+                    final_stale += 1
+                elif reason == 1:  # financial
+                    final_financial += 1
+                elif reason == 2:  # drawdown
+                    final_drawdown += 1
             
             # Compute total gain (product of monthly gains)
             gains = candidate_gains.get(candidate_id, [])
@@ -1886,14 +2239,41 @@ def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_p
                 except (PermissionError, OSError):
                     pass
 
+        # Log bankruptcy summary
+        total_candidates = len(individuals)
+        if RICH_AVAILABLE and console and file_logging:
+            summary_msg = (
+                f"🧬 Candidates: {total_candidates} | "
+                f"✅{final_passed} (Success) "
+                f"😴{final_no_pos} (No position) "
+                f"📌{final_stale} (Stale position) "
+                f"💀{final_drawdown} (Max drawdown) "
+                f"💸{final_financial} (Financial)"
+            )
+            with open(watch_path, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
+                console.print(summary_msg)
+
         return fitness_results
 
     # Legacy mode: single evaluation per individual
     # Prepare evaluation arguments
-    all_args = []
-    for idx, individual in enumerate(individuals):
-        # Include the index to maintain pairing
-        all_args.append((evaluator, individual, False, idx))
+    # Requirements: 1.2, 11.1 - Use ArgumentPool when enabled
+    use_argument_pool = (
+        argument_pool is not None and 
+        optimization_config is not None and 
+        optimization_config.enable_argument_pool
+    )
+    
+    if use_argument_pool:
+        # Use pre-allocated argument containers from the pool
+        # show_me_indices is empty set since we don't show any individuals in legacy mode
+        all_args = argument_pool.get_args(individuals, set())
+    else:
+        # Fall back to creating new tuples (original behavior)
+        all_args = []
+        for idx, individual in enumerate(individuals):
+            # Include the index to maintain pairing
+            all_args.append((evaluator, individual, False, idx))
 
     # Evaluate with progress bar
     if RICH_AVAILABLE and console:
@@ -1914,11 +2294,16 @@ def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_p
             ) as progress:
                 # Initialize generational best tracking
                 generational_best = float('inf')
-                bankrupt_count = 0
-                non_bankrupt_count = 0
+                
+                # Track bankruptcy by reason: 0=none, 1=financial, 2=drawdown, 3=no_positions, 4=stale_position
+                passed_count = 0
+                no_pos_count = 0
+                stale_count = 0
+                financial_count = 0
+                drawdown_count = 0
 
                 task = progress.add_task(
-                    f"DEAP Evaluating individuals | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}",
+                    f"🧬 ✅0 😴0 📌0 💀0 💸0 | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}",
                     total=len(individuals)
                 )
 
@@ -1926,14 +2311,23 @@ def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_p
                 fitness_results = [None] * len(individuals)  # Pre-allocate array
 
                 for result in pool.imap_unordered(_evaluate_solution_worker, all_args):
-                    fitness_tuple, position_idx, bankrupt = result
+                    fitness_tuple, position_idx, bankrupt, bankruptcy_reason = result
                     fitness_results[position_idx] = fitness_tuple  # Place fitness tuple at correct index
 
-                    # Track bankruptcy counts
-                    if bankrupt:
-                        bankrupt_count += 1
+                    # Track bankruptcy by reason
+                    if not bankrupt:
+                        passed_count += 1
+                    elif bankruptcy_reason == 3:  # no_positions
+                        no_pos_count += 1
+                    elif bankruptcy_reason == 4:  # stale_position
+                        stale_count += 1
+                    elif bankruptcy_reason == 1:  # financial
+                        financial_count += 1
+                    elif bankruptcy_reason == 2:  # drawdown
+                        drawdown_count += 1
                     else:
-                        non_bankrupt_count += 1
+                        # Unknown reason, count as drawdown (most common)
+                        drawdown_count += 1
 
                     # Track best in current generation (batch)
                     if fitness_tuple and len(fitness_tuple) > 0:
@@ -1941,23 +2335,33 @@ def _evaluate_population_parallel(individuals, evaluator, pool, console, watch_p
                         if fitness_val < generational_best:
                             generational_best = fitness_val
 
-                    # Simple count display
-                    push_bar = f"✅{non_bankrupt_count} 💀{bankrupt_count}"
-
                     # Update progress with counts and fitness info
                     emoji = "🧬" if generational_best >= global_best else "🔥"
                     progress.update(
                         task,
                         advance=1,
-                        description=f"{emoji} {push_bar} | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}"
+                        description=f"{emoji} ✅{passed_count} 😴{no_pos_count} 📌{stale_count} 💀{drawdown_count} 💸{financial_count} | Gen Best: {generational_best:.6e} | Global Best: {global_best:.6e}"
                     )
 
-                return fitness_results
+            # Log bankruptcy summary after progress bar completes
+            total_candidates = len(individuals)
+            summary_msg = (
+                f"🧬 Candidates: {total_candidates} | "
+                f"✅{passed_count} (Success) "
+                f"😴{no_pos_count} (No position) "
+                f"📌{stale_count} (Stale position) "
+                f"💀{drawdown_count} (Max drawdown) "
+                f"💸{financial_count} (Financial)"
+            )
+            with open(watch_path, "a") as f, contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
+                console.print(summary_msg)
+
+            return fitness_results
     else:
         # Fallback without progress bar
         fitness_results = [None] * len(individuals)
         for result in pool.imap_unordered(_evaluate_solution_worker, all_args):
-            fitness_tuple, position_idx, bankrupt = result
+            fitness_tuple, position_idx, bankrupt, bankruptcy_reason = result
             fitness_results[position_idx] = fitness_tuple
         return fitness_results
 

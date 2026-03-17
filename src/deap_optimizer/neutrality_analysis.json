@@ -1,0 +1,2047 @@
+{
+  "summary": {
+    "total_snapshots": 107,
+    "total_parameters": 20,
+    "analysis_timestamp": "2026-02-22T11:54:09.539966"
+  },
+  "parameter_stats": {
+    "long_entry_trailing_grid_ratio": {
+      "neutrality_rate": 0.16822429906542055,
+      "convergence_rate": 0.8317757009345794,
+      "times_neutral": 18,
+      "times_converged": 89,
+      "times_seen": 107
+    },
+    "long_filter_rolling_window": {
+      "neutrality_rate": 0.205607476635514,
+      "convergence_rate": 0.794392523364486,
+      "times_neutral": 22,
+      "times_converged": 85,
+      "times_seen": 107
+    },
+    "long_total_wallet_exposure_limit": {
+      "neutrality_rate": 0.2336448598130841,
+      "convergence_rate": 0.7663551401869159,
+      "times_neutral": 25,
+      "times_converged": 82,
+      "times_seen": 107
+    },
+    "long_close_grid_min_markup": {
+      "neutrality_rate": 0.16822429906542055,
+      "convergence_rate": 0.8317757009345794,
+      "times_neutral": 18,
+      "times_converged": 89,
+      "times_seen": 107
+    },
+    "long_ema_span_1": {
+      "neutrality_rate": 0.2616822429906542,
+      "convergence_rate": 0.7383177570093458,
+      "times_neutral": 28,
+      "times_converged": 79,
+      "times_seen": 107
+    },
+    "long_entry_grid_spacing_weight": {
+      "neutrality_rate": 0.1308411214953271,
+      "convergence_rate": 0.8691588785046729,
+      "times_neutral": 14,
+      "times_converged": 93,
+      "times_seen": 107
+    },
+    "long_unstuck_threshold": {
+      "neutrality_rate": 0.3364485981308411,
+      "convergence_rate": 0.6635514018691588,
+      "times_neutral": 36,
+      "times_converged": 71,
+      "times_seen": 107
+    },
+    "long_entry_initial_qty_pct": {
+      "neutrality_rate": 0.22429906542056074,
+      "convergence_rate": 0.7757009345794392,
+      "times_neutral": 24,
+      "times_converged": 83,
+      "times_seen": 107
+    },
+    "long_entry_initial_ema_dist": {
+      "neutrality_rate": 0.12149532710280374,
+      "convergence_rate": 0.8785046728971962,
+      "times_neutral": 13,
+      "times_converged": 94,
+      "times_seen": 107
+    },
+    "long_filter_relative_volume_clip_pct": {
+      "neutrality_rate": 0.27102803738317754,
+      "convergence_rate": 0.7289719626168224,
+      "times_neutral": 29,
+      "times_converged": 78,
+      "times_seen": 107
+    },
+    "long_ema_span_0": {
+      "neutrality_rate": 0.308411214953271,
+      "convergence_rate": 0.6915887850467289,
+      "times_neutral": 33,
+      "times_converged": 74,
+      "times_seen": 107
+    },
+    "long_entry_grid_spacing_pct": {
+      "neutrality_rate": 0.1308411214953271,
+      "convergence_rate": 0.8691588785046729,
+      "times_neutral": 14,
+      "times_converged": 93,
+      "times_seen": 107
+    },
+    "long_entry_grid_double_down_factor": {
+      "neutrality_rate": 0.08411214953271028,
+      "convergence_rate": 0.9158878504672897,
+      "times_neutral": 9,
+      "times_converged": 98,
+      "times_seen": 107
+    },
+    "long_entry_trailing_threshold_pct": {
+      "neutrality_rate": 0.411214953271028,
+      "convergence_rate": 0.5887850467289719,
+      "times_neutral": 44,
+      "times_converged": 63,
+      "times_seen": 107
+    },
+    "long_close_grid_markup_range": {
+      "neutrality_rate": 0.14953271028037382,
+      "convergence_rate": 0.8504672897196262,
+      "times_neutral": 16,
+      "times_converged": 91,
+      "times_seen": 107
+    },
+    "long_unstuck_loss_allowance_pct": {
+      "neutrality_rate": 0.29906542056074764,
+      "convergence_rate": 0.7009345794392523,
+      "times_neutral": 32,
+      "times_converged": 75,
+      "times_seen": 107
+    },
+    "long_entry_trailing_retracement_pct": {
+      "neutrality_rate": 0.29906542056074764,
+      "convergence_rate": 0.7009345794392523,
+      "times_neutral": 32,
+      "times_converged": 75,
+      "times_seen": 107
+    },
+    "long_unstuck_close_pct": {
+      "neutrality_rate": 0.3177570093457944,
+      "convergence_rate": 0.6822429906542056,
+      "times_neutral": 34,
+      "times_converged": 73,
+      "times_seen": 107
+    },
+    "long_close_grid_qty_pct": {
+      "neutrality_rate": 0.40186915887850466,
+      "convergence_rate": 0.5981308411214953,
+      "times_neutral": 43,
+      "times_converged": 64,
+      "times_seen": 107
+    },
+    "long_unstuck_ema_dist": {
+      "neutrality_rate": 0.29906542056074764,
+      "convergence_rate": 0.7009345794392523,
+      "times_neutral": 32,
+      "times_converged": 75,
+      "times_seen": 107
+    }
+  },
+  "always_neutral_params": [],
+  "never_neutral_params": [],
+  "co_neutral_pairs": [
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 25
+    },
+    {
+      "param1": "long_entry_trailing_retracement_pct",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 23
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 22
+    },
+    {
+      "param1": "long_entry_trailing_threshold_pct",
+      "param2": "long_unstuck_close_pct",
+      "count": 22
+    },
+    {
+      "param1": "long_entry_trailing_threshold_pct",
+      "param2": "long_unstuck_threshold",
+      "count": 22
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_unstuck_ema_dist",
+      "count": 21
+    },
+    {
+      "param1": "long_unstuck_close_pct",
+      "param2": "long_unstuck_ema_dist",
+      "count": 20
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_unstuck_threshold",
+      "count": 19
+    },
+    {
+      "param1": "long_filter_relative_volume_clip_pct",
+      "param2": "long_unstuck_threshold",
+      "count": 19
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 19
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_unstuck_threshold",
+      "count": 19
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 19
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_unstuck_close_pct",
+      "count": 19
+    },
+    {
+      "param1": "long_entry_trailing_threshold_pct",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 19
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 19
+    },
+    {
+      "param1": "long_filter_relative_volume_clip_pct",
+      "param2": "long_unstuck_close_pct",
+      "count": 18
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 18
+    },
+    {
+      "param1": "long_entry_trailing_threshold_pct",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 18
+    },
+    {
+      "param1": "long_entry_trailing_threshold_pct",
+      "param2": "long_unstuck_ema_dist",
+      "count": 18
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_ema_span_1",
+      "count": 18
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 18
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_unstuck_threshold",
+      "count": 18
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_unstuck_close_pct",
+      "count": 17
+    },
+    {
+      "param1": "long_unstuck_close_pct",
+      "param2": "long_unstuck_threshold",
+      "count": 17
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 17
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_filter_rolling_window",
+      "count": 17
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_unstuck_ema_dist",
+      "count": 16
+    },
+    {
+      "param1": "long_filter_relative_volume_clip_pct",
+      "param2": "long_unstuck_ema_dist",
+      "count": 16
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_unstuck_close_pct",
+      "count": 16
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_unstuck_threshold",
+      "count": 16
+    },
+    {
+      "param1": "long_entry_trailing_retracement_pct",
+      "param2": "long_unstuck_close_pct",
+      "count": 16
+    },
+    {
+      "param1": "long_entry_trailing_threshold_pct",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 16
+    },
+    {
+      "param1": "long_unstuck_ema_dist",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 15
+    },
+    {
+      "param1": "long_unstuck_ema_dist",
+      "param2": "long_unstuck_threshold",
+      "count": 15
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 15
+    },
+    {
+      "param1": "long_entry_trailing_retracement_pct",
+      "param2": "long_unstuck_ema_dist",
+      "count": 15
+    },
+    {
+      "param1": "long_total_wallet_exposure_limit",
+      "param2": "long_unstuck_ema_dist",
+      "count": 15
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 15
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_ema_span_0",
+      "count": 15
+    },
+    {
+      "param1": "long_filter_relative_volume_clip_pct",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 14
+    },
+    {
+      "param1": "long_unstuck_close_pct",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 14
+    },
+    {
+      "param1": "long_unstuck_loss_allowance_pct",
+      "param2": "long_unstuck_threshold",
+      "count": 14
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 14
+    },
+    {
+      "param1": "long_entry_trailing_retracement_pct",
+      "param2": "long_unstuck_threshold",
+      "count": 14
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_close_grid_qty_pct",
+      "count": 14
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_unstuck_ema_dist",
+      "count": 14
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_unstuck_close_pct",
+      "count": 14
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 14
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 14
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 13
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 13
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_unstuck_ema_dist",
+      "count": 13
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_close_grid_qty_pct",
+      "count": 13
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 13
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 13
+    },
+    {
+      "param1": "long_entry_trailing_threshold_pct",
+      "param2": "long_filter_rolling_window",
+      "count": 13
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 13
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 13
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 12
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 12
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 12
+    },
+    {
+      "param1": "long_entry_trailing_retracement_pct",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 12
+    },
+    {
+      "param1": "long_total_wallet_exposure_limit",
+      "param2": "long_unstuck_threshold",
+      "count": 12
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 12
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_unstuck_threshold",
+      "count": 12
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_unstuck_close_pct",
+      "count": 12
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_unstuck_threshold",
+      "count": 12
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_entry_grid_spacing_pct",
+      "count": 12
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 12
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 12
+    },
+    {
+      "param1": "long_filter_rolling_window",
+      "param2": "long_unstuck_threshold",
+      "count": 12
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 12
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_ema_span_1",
+      "count": 12
+    },
+    {
+      "param1": "long_total_wallet_exposure_limit",
+      "param2": "long_unstuck_close_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_unstuck_threshold",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_unstuck_close_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_unstuck_ema_dist",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_unstuck_threshold",
+      "count": 11
+    },
+    {
+      "param1": "long_filter_rolling_window",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_entry_grid_spacing_weight",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_trailing_retracement_pct",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_entry_trailing_retracement_pct",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 11
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_ema_span_0",
+      "count": 11
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 10
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 10
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 10
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_unstuck_ema_dist",
+      "count": 10
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 10
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 10
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_unstuck_close_pct",
+      "count": 10
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 10
+    },
+    {
+      "param1": "long_filter_relative_volume_clip_pct",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 10
+    },
+    {
+      "param1": "long_filter_rolling_window",
+      "param2": "long_unstuck_ema_dist",
+      "count": 10
+    },
+    {
+      "param1": "long_total_wallet_exposure_limit",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 10
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 10
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 10
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_unstuck_ema_dist",
+      "count": 10
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_entry_grid_spacing_pct",
+      "count": 10
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_ema_span_1",
+      "count": 9
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 9
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_unstuck_ema_dist",
+      "count": 9
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_ema_span_1",
+      "count": 9
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_filter_rolling_window",
+      "count": 9
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 9
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_filter_rolling_window",
+      "count": 9
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 9
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_unstuck_ema_dist",
+      "count": 9
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_filter_rolling_window",
+      "count": 9
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 9
+    },
+    {
+      "param1": "long_filter_rolling_window",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 9
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_entry_grid_spacing_weight",
+      "count": 9
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 9
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 9
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_filter_rolling_window",
+      "count": 9
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 9
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 9
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_entry_grid_double_down_factor",
+      "count": 8
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_entry_grid_spacing_pct",
+      "count": 8
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_entry_grid_spacing_pct",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_filter_rolling_window",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_initial_qty_pct",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 8
+    },
+    {
+      "param1": "long_filter_rolling_window",
+      "param2": "long_unstuck_close_pct",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_filter_rolling_window",
+      "count": 8
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_entry_initial_ema_dist",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_unstuck_threshold",
+      "count": 8
+    },
+    {
+      "param1": "long_close_grid_qty_pct",
+      "param2": "long_entry_initial_ema_dist",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_trailing_retracement_pct",
+      "param2": "long_filter_rolling_window",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 8
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_entry_grid_spacing_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 7
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_filter_rolling_window",
+      "count": 7
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_unstuck_close_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_unstuck_close_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_unstuck_ema_dist",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_filter_relative_volume_clip_pct",
+      "param2": "long_filter_rolling_window",
+      "count": 7
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_entry_grid_spacing_weight",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_entry_grid_spacing_weight",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_unstuck_close_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_entry_trailing_threshold_pct",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_unstuck_threshold",
+      "count": 7
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_ema_span_0",
+      "count": 7
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_unstuck_threshold",
+      "count": 6
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_unstuck_loss_allowance_pct",
+      "count": 6
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_entry_grid_double_down_factor",
+      "count": 6
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_total_wallet_exposure_limit",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 6
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_entry_grid_spacing_weight",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_grid_spacing_pct",
+      "param2": "long_entry_initial_ema_dist",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_entry_initial_ema_dist",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_entry_initial_qty_pct",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_filter_rolling_window",
+      "count": 6
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_entry_grid_spacing_weight",
+      "count": 6
+    },
+    {
+      "param1": "long_close_grid_min_markup",
+      "param2": "long_entry_initial_ema_dist",
+      "count": 6
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_entry_initial_ema_dist",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_entry_trailing_retracement_pct",
+      "count": 6
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 6
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_close_grid_min_markup",
+      "count": 5
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_entry_grid_double_down_factor",
+      "count": 5
+    },
+    {
+      "param1": "long_ema_span_1",
+      "param2": "long_entry_grid_double_down_factor",
+      "count": 5
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_entry_grid_spacing_pct",
+      "count": 5
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 5
+    },
+    {
+      "param1": "long_entry_trailing_grid_ratio",
+      "param2": "long_filter_rolling_window",
+      "count": 5
+    },
+    {
+      "param1": "long_ema_span_0",
+      "param2": "long_entry_grid_double_down_factor",
+      "count": 5
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_entry_grid_spacing_weight",
+      "count": 5
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_filter_relative_volume_clip_pct",
+      "count": 5
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_unstuck_close_pct",
+      "count": 5
+    },
+    {
+      "param1": "long_entry_initial_ema_dist",
+      "param2": "long_unstuck_ema_dist",
+      "count": 5
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_filter_rolling_window",
+      "count": 4
+    },
+    {
+      "param1": "long_entry_grid_double_down_factor",
+      "param2": "long_entry_initial_ema_dist",
+      "count": 4
+    },
+    {
+      "param1": "long_close_grid_markup_range",
+      "param2": "long_entry_initial_ema_dist",
+      "count": 4
+    },
+    {
+      "param1": "long_entry_grid_spacing_weight",
+      "param2": "long_entry_trailing_grid_ratio",
+      "count": 4
+    }
+  ],
+  "convergence_patterns": {
+    "long_entry_trailing_grid_ratio": {
+      "mean": -0.38594774836661266,
+      "std": 0.26453366681212176,
+      "min": -0.9964292111087385,
+      "max": -0.0019182460505036,
+      "median": -0.3337436735652263,
+      "n_samples": 89,
+      "is_consistent": false
+    },
+    "long_filter_rolling_window": {
+      "mean": 146.9199025999088,
+      "std": 94.15565344557174,
+      "min": 16.887665733796318,
+      "max": 355.6646914377576,
+      "median": 140.72133345927364,
+      "n_samples": 85,
+      "is_consistent": false
+    },
+    "long_total_wallet_exposure_limit": {
+      "mean": 0.8752225426801048,
+      "std": 0.6176648733934349,
+      "min": 0.13850202896033978,
+      "max": 2.8957992519411966,
+      "median": 0.7480058423917411,
+      "n_samples": 82,
+      "is_consistent": false
+    },
+    "long_close_grid_min_markup": {
+      "mean": 0.004078784430411472,
+      "std": 0.0023985229032635336,
+      "min": 0.0010457461329494593,
+      "max": 0.012716365431200832,
+      "median": 0.003507404741601051,
+      "n_samples": 89,
+      "is_consistent": false
+    },
+    "long_ema_span_1": {
+      "mean": 758.2568178795642,
+      "std": 360.3760130990847,
+      "min": 102.12317221545857,
+      "max": 1402.4132517987046,
+      "median": 746.7050745174653,
+      "n_samples": 79,
+      "is_consistent": false
+    },
+    "long_entry_grid_spacing_weight": {
+      "mean": 1.8807253952710636,
+      "std": 1.7033390021679842,
+      "min": 0.007292435306319511,
+      "max": 7.630422536529558,
+      "median": 1.4388537980430438,
+      "n_samples": 93,
+      "is_consistent": false
+    },
+    "long_unstuck_threshold": {
+      "mean": 0.626861194415131,
+      "std": 0.15281746569766833,
+      "min": 0.40065702923676305,
+      "max": 0.9445055220287812,
+      "median": 0.6299493447549382,
+      "n_samples": 71,
+      "is_consistent": false
+    },
+    "long_entry_initial_qty_pct": {
+      "mean": 0.007071770179605856,
+      "std": 0.002931772330613091,
+      "min": 0.004168952318625253,
+      "max": 0.01805662508382915,
+      "median": 0.0059003282475093115,
+      "n_samples": 83,
+      "is_consistent": false
+    },
+    "long_entry_initial_ema_dist": {
+      "mean": -0.052388792055721105,
+      "std": 0.027089525558873173,
+      "min": -0.09940414495056049,
+      "max": 0.0013699738947266817,
+      "median": -0.05318340079298117,
+      "n_samples": 94,
+      "is_consistent": false
+    },
+    "long_filter_relative_volume_clip_pct": {
+      "mean": 0.5991028105403975,
+      "std": 0.2890350898803796,
+      "min": 0.011172873683232519,
+      "max": 0.9912847607530607,
+      "median": 0.6688103677908999,
+      "n_samples": 78,
+      "is_consistent": false
+    },
+    "long_ema_span_0": {
+      "mean": 690.6844697383485,
+      "std": 387.9516357371018,
+      "min": 104.25858740132479,
+      "max": 1408.9198298370504,
+      "median": 688.1563241483567,
+      "n_samples": 74,
+      "is_consistent": false
+    },
+    "long_entry_grid_spacing_pct": {
+      "mean": 0.034995923572247706,
+      "std": 0.00960544826202179,
+      "min": 0.009867298622681115,
+      "max": 0.056239983252016915,
+      "median": 0.0360217749355674,
+      "n_samples": 93,
+      "is_consistent": false
+    },
+    "long_entry_grid_double_down_factor": {
+      "mean": 1.2570875237509433,
+      "std": 0.8227266914167809,
+      "min": 0.10390489169880959,
+      "max": 2.9167586965013683,
+      "median": 1.1385272193977949,
+      "n_samples": 98,
+      "is_consistent": false
+    },
+    "long_entry_trailing_threshold_pct": {
+      "mean": 0.04220113873758808,
+      "std": 0.024604924767689648,
+      "min": 0.002159213992261884,
+      "max": 0.09814125399085995,
+      "median": 0.03829040171324027,
+      "n_samples": 63,
+      "is_consistent": false
+    },
+    "long_close_grid_markup_range": {
+      "mean": 0.004150405044150687,
+      "std": 0.004165113462579437,
+      "min": 1.7058939530395972e-05,
+      "max": 0.021807810566533494,
+      "median": 0.002782405308356199,
+      "n_samples": 91,
+      "is_consistent": false
+    },
+    "long_unstuck_loss_allowance_pct": {
+      "mean": 0.0332939403956762,
+      "std": 0.0126228703343329,
+      "min": 0.0046138099602167915,
+      "max": 0.049991633588760555,
+      "median": 0.034936425397633364,
+      "n_samples": 75,
+      "is_consistent": false
+    },
+    "long_entry_trailing_retracement_pct": {
+      "mean": 0.035437517309483475,
+      "std": 0.026195434727646964,
+      "min": 0.000641642835453113,
+      "max": 0.09162051869314415,
+      "median": 0.030506474442010253,
+      "n_samples": 75,
+      "is_consistent": false
+    },
+    "long_unstuck_close_pct": {
+      "mean": 0.056627312848295586,
+      "std": 0.02660926265252145,
+      "min": 0.0035654075693372436,
+      "max": 0.09665699127635684,
+      "median": 0.061567697723431805,
+      "n_samples": 73,
+      "is_consistent": false
+    },
+    "long_close_grid_qty_pct": {
+      "mean": 0.5776078076136159,
+      "std": 0.27321948194897305,
+      "min": 0.07240686805263685,
+      "max": 0.9997298343744123,
+      "median": 0.608046344869818,
+      "n_samples": 64,
+      "is_consistent": false
+    },
+    "long_unstuck_ema_dist": {
+      "mean": -0.054836108753267575,
+      "std": 0.03329148158512872,
+      "min": -0.09999833388099298,
+      "max": 0.009748406145526892,
+      "median": -0.06725873911145751,
+      "n_samples": 75,
+      "is_consistent": false
+    }
+  },
+  "conditional_rules": {
+    "long_entry_trailing_grid_ratio": [
+      {
+        "condition_param": "long_ema_span_1",
+        "condition_type": "range",
+        "min": 231.00355039566767,
+        "max": 1353.3715145485874,
+        "occurrences": 8,
+        "description": "long_entry_trailing_grid_ratio is neutral when long_ema_span_1 in [231.0036, 1353.3715]"
+      },
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.02291624163997821,
+        "max": 0.046595303347224934,
+        "occurrences": 12,
+        "description": "long_entry_trailing_grid_ratio is neutral when long_entry_grid_spacing_pct in [0.0229, 0.0466]"
+      },
+      {
+        "condition_param": "long_filter_relative_volume_clip_pct",
+        "condition_type": "range",
+        "min": 0.0563607090073749,
+        "max": 0.9815224428749175,
+        "occurrences": 7,
+        "description": "long_entry_trailing_grid_ratio is neutral when long_filter_relative_volume_clip_pct in [0.0564, 0.9815]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.005164764101030015,
+        "max": 0.07678453880171883,
+        "occurrences": 7,
+        "description": "long_entry_trailing_grid_ratio is neutral when long_unstuck_close_pct in [0.0052, 0.0768]"
+      },
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.009655479479745368,
+        "max": 0.047064888722665996,
+        "occurrences": 8,
+        "description": "long_entry_trailing_grid_ratio is neutral when long_unstuck_loss_allowance_pct in [0.0097, 0.0471]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.4783491551074932,
+        "max": 0.7959861747163655,
+        "occurrences": 7,
+        "description": "long_entry_trailing_grid_ratio is neutral when long_unstuck_threshold in [0.4783, 0.7960]"
+      },
+      {
+        "condition_param": "long_entry_trailing_threshold_pct",
+        "condition_type": "range",
+        "min": 0.020379536274597477,
+        "max": 0.05077930885123698,
+        "occurrences": 5,
+        "description": "long_entry_trailing_grid_ratio is neutral when long_entry_trailing_threshold_pct in [0.0204, 0.0508]"
+      },
+      {
+        "condition_param": "long_close_grid_qty_pct",
+        "condition_type": "range",
+        "min": 0.27387658568338497,
+        "max": 0.9262800830686609,
+        "occurrences": 3,
+        "description": "long_entry_trailing_grid_ratio is neutral when long_close_grid_qty_pct in [0.2739, 0.9263]"
+      }
+    ],
+    "long_filter_rolling_window": [
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.010988635975650161,
+        "max": 0.04791790095013732,
+        "occurrences": 11,
+        "description": "long_filter_rolling_window is neutral when long_unstuck_loss_allowance_pct in [0.0110, 0.0479]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.5528188237013595,
+        "max": 0.9445055220287812,
+        "occurrences": 10,
+        "description": "long_filter_rolling_window is neutral when long_unstuck_threshold in [0.5528, 0.9445]"
+      }
+    ],
+    "long_total_wallet_exposure_limit": [
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.015521495973035964,
+        "max": 0.05140280596308877,
+        "occurrences": 16,
+        "description": "long_total_wallet_exposure_limit is neutral when long_entry_grid_spacing_pct in [0.0155, 0.0514]"
+      },
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.010988635975650161,
+        "max": 0.04789323181657954,
+        "occurrences": 15,
+        "description": "long_total_wallet_exposure_limit is neutral when long_unstuck_loss_allowance_pct in [0.0110, 0.0479]"
+      },
+      {
+        "condition_param": "long_entry_trailing_threshold_pct",
+        "condition_type": "range",
+        "min": 0.03829040171324027,
+        "max": 0.07880298189351669,
+        "occurrences": 7,
+        "description": "long_total_wallet_exposure_limit is neutral when long_entry_trailing_threshold_pct in [0.0383, 0.0788]"
+      }
+    ],
+    "long_close_grid_min_markup": [
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.02547089078342281,
+        "max": 0.04323062967173048,
+        "occurrences": 10,
+        "description": "long_close_grid_min_markup is neutral when long_entry_grid_spacing_pct in [0.0255, 0.0432]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.47046676303096013,
+        "max": 0.7859746949450189,
+        "occurrences": 6,
+        "description": "long_close_grid_min_markup is neutral when long_unstuck_threshold in [0.4705, 0.7860]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.03186196276684817,
+        "max": 0.07330162428769611,
+        "occurrences": 6,
+        "description": "long_close_grid_min_markup is neutral when long_unstuck_close_pct in [0.0319, 0.0733]"
+      }
+    ],
+    "long_ema_span_1": [
+      {
+        "condition_param": "long_close_grid_qty_pct",
+        "condition_type": "range",
+        "min": 0.20437355988634257,
+        "max": 0.959552762567349,
+        "occurrences": 10,
+        "description": "long_ema_span_1 is neutral when long_close_grid_qty_pct in [0.2044, 0.9596]"
+      },
+      {
+        "condition_param": "long_filter_relative_volume_clip_pct",
+        "condition_type": "range",
+        "min": 0.35287005167055985,
+        "max": 0.9815224428749175,
+        "occurrences": 15,
+        "description": "long_ema_span_1 is neutral when long_filter_relative_volume_clip_pct in [0.3529, 0.9815]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.02284500007993128,
+        "max": 0.08785241018922112,
+        "occurrences": 11,
+        "description": "long_ema_span_1 is neutral when long_unstuck_close_pct in [0.0228, 0.0879]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.41265816944257133,
+        "max": 0.8632361047427967,
+        "occurrences": 9,
+        "description": "long_ema_span_1 is neutral when long_unstuck_threshold in [0.4127, 0.8632]"
+      }
+    ],
+    "long_entry_grid_spacing_weight": [
+      {
+        "condition_param": "long_close_grid_min_markup",
+        "condition_type": "range",
+        "min": 0.0025456776763826735,
+        "max": 0.007398993983737851,
+        "occurrences": 8,
+        "description": "long_entry_grid_spacing_weight is neutral when long_close_grid_min_markup in [0.0025, 0.0074]"
+      },
+      {
+        "condition_param": "long_filter_relative_volume_clip_pct",
+        "condition_type": "range",
+        "min": 0.09536872130482628,
+        "max": 0.9681111555182718,
+        "occurrences": 8,
+        "description": "long_entry_grid_spacing_weight is neutral when long_filter_relative_volume_clip_pct in [0.0954, 0.9681]"
+      },
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.010988635975650161,
+        "max": 0.04669062456187972,
+        "occurrences": 7,
+        "description": "long_entry_grid_spacing_weight is neutral when long_unstuck_loss_allowance_pct in [0.0110, 0.0467]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.41265816944257133,
+        "max": 0.8632361047427967,
+        "occurrences": 6,
+        "description": "long_entry_grid_spacing_weight is neutral when long_unstuck_threshold in [0.4127, 0.8632]"
+      },
+      {
+        "condition_param": "long_ema_span_1",
+        "condition_type": "range",
+        "min": 657.9307327850762,
+        "max": 1333.9621536763912,
+        "occurrences": 5,
+        "description": "long_entry_grid_spacing_weight is neutral when long_ema_span_1 in [657.9307, 1333.9622]"
+      }
+    ],
+    "long_unstuck_threshold": [
+      {
+        "condition_param": "long_filter_relative_volume_clip_pct",
+        "condition_type": "range",
+        "min": 0.24792601983002854,
+        "max": 0.9681111555182718,
+        "occurrences": 17,
+        "description": "long_unstuck_threshold is neutral when long_filter_relative_volume_clip_pct in [0.2479, 0.9681]"
+      }
+    ],
+    "long_entry_initial_qty_pct": [
+      {
+        "condition_param": "long_close_grid_qty_pct",
+        "condition_type": "range",
+        "min": 0.16530657923554407,
+        "max": 0.9491056927879508,
+        "occurrences": 7,
+        "description": "long_entry_initial_qty_pct is neutral when long_close_grid_qty_pct in [0.1653, 0.9491]"
+      },
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.01930547083148313,
+        "max": 0.04323062967173048,
+        "occurrences": 12,
+        "description": "long_entry_initial_qty_pct is neutral when long_entry_grid_spacing_pct in [0.0193, 0.0432]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.5122880760538652,
+        "max": 0.8632361047427967,
+        "occurrences": 8,
+        "description": "long_entry_initial_qty_pct is neutral when long_unstuck_threshold in [0.5123, 0.8632]"
+      },
+      {
+        "condition_param": "long_ema_span_1",
+        "condition_type": "range",
+        "min": 589.9978475423006,
+        "max": 1333.9621536763912,
+        "occurrences": 10,
+        "description": "long_entry_initial_qty_pct is neutral when long_ema_span_1 in [589.9978, 1333.9622]"
+      }
+    ],
+    "long_entry_initial_ema_dist": [
+      {
+        "condition_param": "long_ema_span_1",
+        "condition_type": "range",
+        "min": 689.4368311609072,
+        "max": 1351.7277528810666,
+        "occurrences": 7,
+        "description": "long_entry_initial_ema_dist is neutral when long_ema_span_1 in [689.4368, 1351.7278]"
+      },
+      {
+        "condition_param": "long_entry_grid_double_down_factor",
+        "condition_type": "range",
+        "min": 0.8078340501452019,
+        "max": 1.7272745302608525,
+        "occurrences": 9,
+        "description": "long_entry_initial_ema_dist is neutral when long_entry_grid_double_down_factor in [0.8078, 1.7273]"
+      },
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.024782725534740487,
+        "max": 0.04669062456187972,
+        "occurrences": 6,
+        "description": "long_entry_initial_ema_dist is neutral when long_unstuck_loss_allowance_pct in [0.0248, 0.0467]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.40065702923676305,
+        "max": 0.7064056681086406,
+        "occurrences": 6,
+        "description": "long_entry_initial_ema_dist is neutral when long_unstuck_threshold in [0.4007, 0.7064]"
+      }
+    ],
+    "long_filter_relative_volume_clip_pct": [
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.021272513547699205,
+        "max": 0.0470879959371563,
+        "occurrences": 21,
+        "description": "long_filter_relative_volume_clip_pct is neutral when long_entry_grid_spacing_pct in [0.0213, 0.0471]"
+      },
+      {
+        "condition_param": "long_ema_span_1",
+        "condition_type": "range",
+        "min": 408.30133810786987,
+        "max": 1353.3715145485874,
+        "occurrences": 16,
+        "description": "long_filter_relative_volume_clip_pct is neutral when long_ema_span_1 in [408.3013, 1353.3715]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.03749646429892965,
+        "max": 0.08740603100072547,
+        "occurrences": 11,
+        "description": "long_filter_relative_volume_clip_pct is neutral when long_unstuck_close_pct in [0.0375, 0.0874]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.4129837110531556,
+        "max": 0.8710281911533672,
+        "occurrences": 10,
+        "description": "long_filter_relative_volume_clip_pct is neutral when long_unstuck_threshold in [0.4130, 0.8710]"
+      }
+    ],
+    "long_ema_span_0": [
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.015521495973035964,
+        "max": 0.056239983252016915,
+        "occurrences": 23,
+        "description": "long_ema_span_0 is neutral when long_entry_grid_spacing_pct in [0.0155, 0.0562]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.0035654075693372436,
+        "max": 0.07962522640572642,
+        "occurrences": 19,
+        "description": "long_ema_span_0 is neutral when long_unstuck_close_pct in [0.0036, 0.0796]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.4275447108824772,
+        "max": 0.7941457933265005,
+        "occurrences": 15,
+        "description": "long_ema_span_0 is neutral when long_unstuck_threshold in [0.4275, 0.7941]"
+      },
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.004942101440486547,
+        "max": 0.04791790095013732,
+        "occurrences": 21,
+        "description": "long_ema_span_0 is neutral when long_unstuck_loss_allowance_pct in [0.0049, 0.0479]"
+      }
+    ],
+    "long_entry_grid_spacing_pct": [
+      {
+        "condition_param": "long_entry_trailing_threshold_pct",
+        "condition_type": "range",
+        "min": 0.031451150907201186,
+        "max": 0.06224276222931652,
+        "occurrences": 3,
+        "description": "long_entry_grid_spacing_pct is neutral when long_entry_trailing_threshold_pct in [0.0315, 0.0622]"
+      },
+      {
+        "condition_param": "long_filter_relative_volume_clip_pct",
+        "condition_type": "range",
+        "min": 0.37320810545681304,
+        "max": 0.9681111555182718,
+        "occurrences": 6,
+        "description": "long_entry_grid_spacing_pct is neutral when long_filter_relative_volume_clip_pct in [0.3732, 0.9681]"
+      },
+      {
+        "condition_param": "long_total_wallet_exposure_limit",
+        "condition_type": "range",
+        "min": 0.18059678744427085,
+        "max": 1.1018884741874213,
+        "occurrences": 5,
+        "description": "long_entry_grid_spacing_pct is neutral when long_total_wallet_exposure_limit in [0.1806, 1.1019]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "near_value",
+        "value": 0.07030782534809951,
+        "std": 0.004793245234026102,
+        "occurrences": 4,
+        "description": "long_entry_grid_spacing_pct is neutral when long_unstuck_close_pct \u2248 0.0703 (\u00b10.0048)"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.06230892184366242,
+        "max": 0.07460341615179258,
+        "occurrences": 4,
+        "description": "long_entry_grid_spacing_pct is neutral when long_unstuck_close_pct in [0.0623, 0.0746]"
+      },
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.009655479479745368,
+        "max": 0.04791790095013732,
+        "occurrences": 7,
+        "description": "long_entry_grid_spacing_pct is neutral when long_unstuck_loss_allowance_pct in [0.0097, 0.0479]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "near_value",
+        "value": 0.5265112264469691,
+        "std": 0.039296759846374506,
+        "occurrences": 3,
+        "description": "long_entry_grid_spacing_pct is neutral when long_unstuck_threshold \u2248 0.5265 (\u00b10.0393)"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.48709722269702316,
+        "max": 0.5801483805900189,
+        "occurrences": 3,
+        "description": "long_entry_grid_spacing_pct is neutral when long_unstuck_threshold in [0.4871, 0.5801]"
+      }
+    ],
+    "long_entry_grid_double_down_factor": [
+      {
+        "condition_param": "long_ema_span_1",
+        "condition_type": "range",
+        "min": 684.3866693873989,
+        "max": 1353.3715145485874,
+        "occurrences": 4,
+        "description": "long_entry_grid_double_down_factor is neutral when long_ema_span_1 in [684.3867, 1353.3715]"
+      },
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.02291624163997821,
+        "max": 0.04155269820688219,
+        "occurrences": 4,
+        "description": "long_entry_grid_double_down_factor is neutral when long_entry_grid_spacing_pct in [0.0229, 0.0416]"
+      },
+      {
+        "condition_param": "long_entry_initial_qty_pct",
+        "condition_type": "range",
+        "min": 0.004382129981699672,
+        "max": 0.005902285028120397,
+        "occurrences": 3,
+        "description": "long_entry_grid_double_down_factor is neutral when long_entry_initial_qty_pct in [0.0044, 0.0059]"
+      },
+      {
+        "condition_param": "long_filter_rolling_window",
+        "condition_type": "range",
+        "min": 102.12677719365388,
+        "max": 179.6842873544672,
+        "occurrences": 5,
+        "description": "long_entry_grid_double_down_factor is neutral when long_filter_rolling_window in [102.1268, 179.6843]"
+      },
+      {
+        "condition_param": "long_total_wallet_exposure_limit",
+        "condition_type": "range",
+        "min": 0.5864850906525443,
+        "max": 1.2212931913397873,
+        "occurrences": 3,
+        "description": "long_entry_grid_double_down_factor is neutral when long_total_wallet_exposure_limit in [0.5865, 1.2213]"
+      },
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.02206375222721693,
+        "max": 0.046457282117737794,
+        "occurrences": 3,
+        "description": "long_entry_grid_double_down_factor is neutral when long_unstuck_loss_allowance_pct in [0.0221, 0.0465]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.41265816944257133,
+        "max": 0.7324896621555068,
+        "occurrences": 3,
+        "description": "long_entry_grid_double_down_factor is neutral when long_unstuck_threshold in [0.4127, 0.7325]"
+      }
+    ],
+    "long_entry_trailing_threshold_pct": [
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.021272513547699205,
+        "max": 0.05140280596308877,
+        "occurrences": 33,
+        "description": "long_entry_trailing_threshold_pct is neutral when long_entry_grid_spacing_pct in [0.0213, 0.0514]"
+      },
+      {
+        "condition_param": "long_filter_relative_volume_clip_pct",
+        "condition_type": "range",
+        "min": 0.21596332677776353,
+        "max": 0.9815224428749175,
+        "occurrences": 25,
+        "description": "long_entry_trailing_threshold_pct is neutral when long_filter_relative_volume_clip_pct in [0.2160, 0.9815]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.41265816944257133,
+        "max": 0.9015951481559606,
+        "occurrences": 22,
+        "description": "long_entry_trailing_threshold_pct is neutral when long_unstuck_threshold in [0.4127, 0.9016]"
+      }
+    ],
+    "long_close_grid_markup_range": [
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.021272513547699205,
+        "max": 0.04198305231538886,
+        "occurrences": 9,
+        "description": "long_close_grid_markup_range is neutral when long_entry_grid_spacing_pct in [0.0213, 0.0420]"
+      },
+      {
+        "condition_param": "long_filter_relative_volume_clip_pct",
+        "condition_type": "range",
+        "min": 0.6183791628451643,
+        "max": 0.9672302601935039,
+        "occurrences": 6,
+        "description": "long_close_grid_markup_range is neutral when long_filter_relative_volume_clip_pct in [0.6184, 0.9672]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.02284500007993128,
+        "max": 0.08785241018922112,
+        "occurrences": 9,
+        "description": "long_close_grid_markup_range is neutral when long_unstuck_close_pct in [0.0228, 0.0879]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.41265816944257133,
+        "max": 0.8632361047427967,
+        "occurrences": 4,
+        "description": "long_close_grid_markup_range is neutral when long_unstuck_threshold in [0.4127, 0.8632]"
+      },
+      {
+        "condition_param": "long_close_grid_qty_pct",
+        "condition_type": "range",
+        "min": 0.6582765143937875,
+        "max": 0.9262800830686609,
+        "occurrences": 3,
+        "description": "long_close_grid_markup_range is neutral when long_close_grid_qty_pct in [0.6583, 0.9263]"
+      },
+      {
+        "condition_param": "long_entry_trailing_threshold_pct",
+        "condition_type": "range",
+        "min": 0.012161602052172532,
+        "max": 0.04274840780935156,
+        "occurrences": 4,
+        "description": "long_close_grid_markup_range is neutral when long_entry_trailing_threshold_pct in [0.0122, 0.0427]"
+      }
+    ],
+    "long_unstuck_loss_allowance_pct": [
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.01930547083148313,
+        "max": 0.050013882852105354,
+        "occurrences": 25,
+        "description": "long_unstuck_loss_allowance_pct is neutral when long_entry_grid_spacing_pct in [0.0193, 0.0500]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.0035654075693372436,
+        "max": 0.08057882573265472,
+        "occurrences": 18,
+        "description": "long_unstuck_loss_allowance_pct is neutral when long_unstuck_close_pct in [0.0036, 0.0806]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.4129837110531556,
+        "max": 0.8613708310401303,
+        "occurrences": 18,
+        "description": "long_unstuck_loss_allowance_pct is neutral when long_unstuck_threshold in [0.4130, 0.8614]"
+      }
+    ],
+    "long_entry_trailing_retracement_pct": [
+      {
+        "condition_param": "long_close_grid_qty_pct",
+        "condition_type": "range",
+        "min": 0.3164194978062393,
+        "max": 0.9272077546159567,
+        "occurrences": 13,
+        "description": "long_entry_trailing_retracement_pct is neutral when long_close_grid_qty_pct in [0.3164, 0.9272]"
+      },
+      {
+        "condition_param": "long_ema_span_1",
+        "condition_type": "range",
+        "min": 127.6530262321935,
+        "max": 1402.4132517987046,
+        "occurrences": 17,
+        "description": "long_entry_trailing_retracement_pct is neutral when long_ema_span_1 in [127.6530, 1402.4133]"
+      },
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.02291624163997821,
+        "max": 0.053219877418511405,
+        "occurrences": 23,
+        "description": "long_entry_trailing_retracement_pct is neutral when long_entry_grid_spacing_pct in [0.0229, 0.0532]"
+      },
+      {
+        "condition_param": "long_filter_relative_volume_clip_pct",
+        "condition_type": "range",
+        "min": 0.21596332677776353,
+        "max": 0.9815224428749175,
+        "occurrences": 21,
+        "description": "long_entry_trailing_retracement_pct is neutral when long_filter_relative_volume_clip_pct in [0.2160, 0.9815]"
+      },
+      {
+        "condition_param": "long_unstuck_close_pct",
+        "condition_type": "range",
+        "min": 0.016566284251641472,
+        "max": 0.08785241018922112,
+        "occurrences": 16,
+        "description": "long_entry_trailing_retracement_pct is neutral when long_unstuck_close_pct in [0.0166, 0.0879]"
+      },
+      {
+        "condition_param": "long_unstuck_loss_allowance_pct",
+        "condition_type": "range",
+        "min": 0.004942101440486547,
+        "max": 0.04789323181657954,
+        "occurrences": 21,
+        "description": "long_entry_trailing_retracement_pct is neutral when long_unstuck_loss_allowance_pct in [0.0049, 0.0479]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.41265816944257133,
+        "max": 0.8613708310401303,
+        "occurrences": 18,
+        "description": "long_entry_trailing_retracement_pct is neutral when long_unstuck_threshold in [0.4127, 0.8614]"
+      }
+    ],
+    "long_unstuck_close_pct": [
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.01930547083148313,
+        "max": 0.053219877418511405,
+        "occurrences": 24,
+        "description": "long_unstuck_close_pct is neutral when long_entry_grid_spacing_pct in [0.0193, 0.0532]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.42546674287871034,
+        "max": 0.9015951481559606,
+        "occurrences": 17,
+        "description": "long_unstuck_close_pct is neutral when long_unstuck_threshold in [0.4255, 0.9016]"
+      }
+    ],
+    "long_close_grid_qty_pct": [
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.41265816944257133,
+        "max": 0.9445055220287812,
+        "occurrences": 24,
+        "description": "long_close_grid_qty_pct is neutral when long_unstuck_threshold in [0.4127, 0.9445]"
+      }
+    ],
+    "long_unstuck_ema_dist": [
+      {
+        "condition_param": "long_close_grid_qty_pct",
+        "condition_type": "range",
+        "min": 0.26242533521294714,
+        "max": 0.9997298343744123,
+        "occurrences": 11,
+        "description": "long_unstuck_ema_dist is neutral when long_close_grid_qty_pct in [0.2624, 0.9997]"
+      },
+      {
+        "condition_param": "long_entry_grid_spacing_pct",
+        "condition_type": "range",
+        "min": 0.01930547083148313,
+        "max": 0.047734386554451,
+        "occurrences": 23,
+        "description": "long_unstuck_ema_dist is neutral when long_entry_grid_spacing_pct in [0.0193, 0.0477]"
+      },
+      {
+        "condition_param": "long_unstuck_threshold",
+        "condition_type": "range",
+        "min": 0.4275447108824772,
+        "max": 0.9445055220287812,
+        "occurrences": 17,
+        "description": "long_unstuck_ema_dist is neutral when long_unstuck_threshold in [0.4275, 0.9445]"
+      }
+    ]
+  },
+  "dependency_graph": {
+    "long_unstuck_threshold": [
+      "long_entry_grid_double_down_factor",
+      "long_entry_initial_ema_dist"
+    ],
+    "long_ema_span_1": [
+      "long_entry_grid_double_down_factor"
+    ],
+    "long_unstuck_loss_allowance_pct": [
+      "long_entry_grid_double_down_factor",
+      "long_close_grid_markup_range"
+    ],
+    "long_unstuck_close_pct": [
+      "long_entry_initial_ema_dist"
+    ],
+    "long_filter_relative_volume_clip_pct": [
+      "long_entry_initial_ema_dist"
+    ],
+    "long_unstuck_ema_dist": [
+      "long_entry_initial_ema_dist"
+    ],
+    "long_close_grid_qty_pct": [
+      "long_entry_initial_ema_dist",
+      "long_entry_grid_double_down_factor"
+    ],
+    "long_entry_trailing_retracement_pct": [
+      "long_entry_grid_spacing_weight",
+      "long_entry_initial_ema_dist"
+    ],
+    "long_entry_trailing_threshold_pct": [
+      "long_entry_grid_double_down_factor",
+      "long_entry_grid_spacing_weight",
+      "long_entry_initial_ema_dist"
+    ],
+    "long_filter_rolling_window": [
+      "long_entry_grid_double_down_factor"
+    ],
+    "long_ema_span_0": [
+      "long_entry_grid_double_down_factor",
+      "long_entry_grid_spacing_weight"
+    ]
+  },
+  "recommendations": [
+    "\n\ud83d\udd17 CONDITIONAL RELATIONSHIPS DETECTED:",
+    "  \u2022 long_entry_trailing_grid_ratio is neutral when long_ema_span_1 in [231.0036, 1353.3715]",
+    "  \u2022 long_entry_trailing_grid_ratio is neutral when long_entry_grid_spacing_pct in [0.0229, 0.0466]",
+    "  \u2022 long_filter_rolling_window is neutral when long_unstuck_loss_allowance_pct in [0.0110, 0.0479]",
+    "  \u2022 long_filter_rolling_window is neutral when long_unstuck_threshold in [0.5528, 0.9445]",
+    "  \u2022 long_total_wallet_exposure_limit is neutral when long_entry_grid_spacing_pct in [0.0155, 0.0514]",
+    "  \u2022 long_total_wallet_exposure_limit is neutral when long_unstuck_loss_allowance_pct in [0.0110, 0.0479]",
+    "  \u2022 long_close_grid_min_markup is neutral when long_entry_grid_spacing_pct in [0.0255, 0.0432]",
+    "  \u2022 long_close_grid_min_markup is neutral when long_unstuck_threshold in [0.4705, 0.7860]",
+    "  \u2022 long_ema_span_1 is neutral when long_close_grid_qty_pct in [0.2044, 0.9596]",
+    "  \u2022 long_ema_span_1 is neutral when long_filter_relative_volume_clip_pct in [0.3529, 0.9815]",
+    "  \u2022 long_entry_grid_spacing_weight is neutral when long_close_grid_min_markup in [0.0025, 0.0074]",
+    "  \u2022 long_entry_grid_spacing_weight is neutral when long_filter_relative_volume_clip_pct in [0.0954, 0.9681]",
+    "  \u2022 long_unstuck_threshold is neutral when long_filter_relative_volume_clip_pct in [0.2479, 0.9681]",
+    "  \u2022 long_entry_initial_qty_pct is neutral when long_close_grid_qty_pct in [0.1653, 0.9491]",
+    "  \u2022 long_entry_initial_qty_pct is neutral when long_entry_grid_spacing_pct in [0.0193, 0.0432]",
+    "  \u2022 long_entry_initial_ema_dist is neutral when long_ema_span_1 in [689.4368, 1351.7278]",
+    "  \u2022 long_entry_initial_ema_dist is neutral when long_entry_grid_double_down_factor in [0.8078, 1.7273]",
+    "  \u2022 long_filter_relative_volume_clip_pct is neutral when long_entry_grid_spacing_pct in [0.0213, 0.0471]",
+    "  \u2022 long_filter_relative_volume_clip_pct is neutral when long_ema_span_1 in [408.3013, 1353.3715]"
+  ]
+}

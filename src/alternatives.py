@@ -559,6 +559,14 @@ def deap_ea(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds
         
         log_message(f"📅 Created {len(intervals)} monthly intervals", emoji="📅")
     
+    # Merge dynamic_population config into stagnation_config
+    merged_stagnation_config = stagnation_config.copy() if stagnation_config else {}
+    if config and "optimize" in config:
+        dynamic_pop = config["optimize"].get("dynamic_population", None)
+        if dynamic_pop:
+            merged_stagnation_config["dynamic_population"] = dynamic_pop
+            log_message(f"📊 Dynamic population config loaded: max={dynamic_pop.get('pop_max')}, min={dynamic_pop.get('pop_min')}", emoji="👥")
+    
     # Run the simplified eaMuPlusLambda algorithm directly
     # This follows the pattern where the algorithm is called directly
     # rather than through a wrapper class
@@ -582,7 +590,7 @@ def deap_ea(population, toolbox, evaluator, ngen, verbose=True, parameter_bounds
             watch_path=WATCH_PATH,
             evaluator=evaluator,
             parameter_bounds=parameter_bounds,
-            stagnation_config=stagnation_config,
+            stagnation_config=merged_stagnation_config,
             intervals=intervals
         )
         

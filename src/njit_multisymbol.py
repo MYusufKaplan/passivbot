@@ -47,7 +47,7 @@ from njit_funcs import (
 from njit_funcs_recursive_grid import calc_recursive_entry_long, calc_recursive_entry_short
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_pnl_sum(poss_long, poss_short, lows, highs, c_mults):
     pnl_sum = 0.0
     for i in range(len(poss_long)):
@@ -57,7 +57,7 @@ def calc_pnl_sum(poss_long, poss_short, lows, highs, c_mults):
     return pnl_sum
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def get_open_orders_long(
     close_price,
     balance,
@@ -125,7 +125,7 @@ def get_open_orders_long(
     return entries, closes
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def get_open_orders_short(
     close_price,
     balance,
@@ -196,7 +196,7 @@ def get_open_orders_short(
     return entries, closes
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_fills(
     pside_idx,  # 0: long, 1: short
     k,
@@ -335,7 +335,7 @@ def calc_fills(
     return fills, new_pos, new_balance, new_equity
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_AU_allowance(
     pnls: np.ndarray, balance: float, loss_allowance_pct=0.01, drop_since_peak_abs=-1.0
 ):
@@ -351,7 +351,7 @@ def calc_AU_allowance(
     return AU_allowance
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def backtest_multisymbol_recursive_grid(
     hlcs,
     starting_balance,
@@ -828,7 +828,7 @@ def backtest_multisymbol_recursive_grid(
     return fills, stats
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def backtest_fast_recursive(
     hlcs,
     starting_balance,
@@ -936,7 +936,7 @@ def backtest_fast_recursive(
     return fills
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def make_buckets(hlcs, bucket_size=15):
     num_buckets = int(np.ceil(hlcs.shape[0] / bucket_size))
     bucketed = np.zeros((num_buckets, hlcs.shape[1], hlcs.shape[2]))
@@ -955,7 +955,7 @@ def make_buckets(hlcs, bucket_size=15):
     return bucketed
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_NRR(hlcs):
     # returns normalized relative range
     # (high - low) / close
@@ -969,7 +969,7 @@ def calc_NRR(hlcs):
     return nrr
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_rolling_mean(data, window=100):
     """
     Calculate the rolling mean of a 1D array with a specified window size, handling cases where data
@@ -1001,7 +1001,7 @@ def calc_rolling_mean(data, window=100):
     return result
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def custom_repeat_rows(arr, n):
     """
     Custom repeat function to repeat each row of a 2D array `n` times.
@@ -1013,7 +1013,7 @@ def custom_repeat_rows(arr, n):
     return repeated_arr
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def repeat_elements_to_rows(arr, n):
     """
     Custom repeat function to repeat each element of a 1D array `n` times into separate rows.
@@ -1025,7 +1025,7 @@ def repeat_elements_to_rows(arr, n):
     return result
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def multiply_arrays(arr0, arr1):
     result = np.empty((len(arr1), len(arr0)))
     for i in range(len(arr1)):
@@ -1034,7 +1034,7 @@ def multiply_arrays(arr0, arr1):
     return result
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_noisiness_argsort_indices(hlcs, bucket_size=15, rolling_window=100):
     bucketed = make_buckets(hlcs, bucket_size)  # bucket into bucket_size
     noisiness = calc_NRR(bucketed)  # compute normalized relative range for each bucket
@@ -1047,12 +1047,12 @@ def calc_noisiness_argsort_indices(hlcs, bucket_size=15, rolling_window=100):
     return reverse_sorted_indices_parallel(shifted)  # return reverse argsort for each timestep
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_next_ema_multiple(alphas, alphas_, emas, closes):
     return multiply_arrays(alphas, closes) + alphas_ * emas
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def prepare_emas_forager(spans_long, spans_short, hlcs_first):
     """
     spans: [span0, span1]
@@ -1072,7 +1072,7 @@ def prepare_emas_forager(spans_long, spans_short, hlcs_first):
     return emas_long, emas_short, alphas_long, alphas__long, alphas_short, alphas__short
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def reverse_sorted_indices_parallel(arr):
     x, y = arr.shape
     sorted_indices_arr = np.empty((x, y), dtype=np.int64)
@@ -1099,7 +1099,7 @@ def precompute_noisiest_indices(hlcs, bucket_size=15, rolling_window=100):
     sorted_indices = reverse_sorted_indices_parallel(noisiness)
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def backtest_forager(
     hlcs,
     noisiness_indices,  # noisiness for all symbols, argsort for each timestep
@@ -1562,7 +1562,7 @@ def backtest_forager(
     return fills, stats
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_unstuck_order(
     c_mults,
     qty_steps,

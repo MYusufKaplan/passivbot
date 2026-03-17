@@ -112,11 +112,118 @@ pub struct TradingEnabled {
     short: bool,
 }
 
-pub struct RollingVolumeSum {
-    long: Vec<f64>,
-    short: Vec<f64>,
-    prev_k_long: usize,
-    prev_k_short: usize,
+// RollingVolumeSum is replaced by IncrementalRollingVolume instances for long and short
+// See rolling_volume_long and rolling_volume_short fields in Backtest struct
+
+/// Incremental rolling volume calculator for optimized volume sum computation.
+/// 
+/// This struct maintains rolling volume sums that are updated incrementally per timestep,
+/// avoiding O(window_size × n_coins) computation overhead.
+/// 
+/// Requirements: 7.1, 7.2, 7.3
+pub struct IncrementalRollingVolume {
+    /// Current rolling sums per coin
+    sums: Vec<f64>,
+    /// Start of current window (inclusive)
+    window_start: usize,
+    /// End of current window (exclusive)
+    window_end: usize,
+    /// Window size in timesteps
+    window_size: usize,
+}
+
+impl IncrementalRollingVolume {
+    /// Creates a new IncrementalRollingVolume calculator.
+    /// 
+    /// # Arguments
+    /// * `n_coins` - Number of coins to track volume for
+    /// * `window_size` - Size of the rolling window in timesteps
+    pub fn new(n_coins: usize, window_size: usize) -> Self {
+        Self {
+            sums: vec![0.0; n_coins],
+            window_start: 0,
+            window_end: 0,
+            window_size,
+        }
+    }
+    
+    /// Updates the rolling volume sums for timestep k.
+    /// 
+    /// Uses incremental update when possible (subtracting old values, adding new values),
+    /// falling back to full recalculation when the gap exceeds the window size.
+    /// 
+    /// # Arguments
+    /// * `k` - Current timestep (exclusive end of window)
+    /// * `hlcvs` - 3D array view of HLCV data [timestep, coin, field]
+    /// 
+    /// # Returns
+    /// Reference to the current rolling sums for all coins
+    /// 
+    /// # Requirements
+    /// - 7.1: Maintains incremental sums updated per timestep
+    /// - 7.2: Subtracts oldest value and adds newest value instead of recomputing
+    /// - 7.3: Falls back to full recalculation when gap exceeds window size
+    pub fn update(&mut self, k: usize, hlcvs: &ArrayView3<f64>) -> &[f64] {
+        let new_start = k.saturating_sub(self.window_size);
+        
+        // Check if we can do incremental update:
+        // - window_end > 0 means we have a valid previous state
+        // - new_start >= window_start means the new window overlaps with or is after the old window start
+        // - new_start <= window_end means there's overlap (not a gap larger than window)
+        if self.window_end > 0 && new_start >= self.window_start && new_start <= self.window_end {
+            // Incremental update: subtract old values, add new values
+            let n_coins = self.sums.len();
+            
+            // Subtract values leaving the window (from old start to new start)
+            for idx in 0..n_coins {
+                for t in self.window_start..new_start {
+                    self.sums[idx] -= hlcvs[[t, idx, VOLUME]];
+                }
+            }
+            
+            // Add values entering the window (from old end to new end)
+            for idx in 0..n_coins {
+                for t in self.window_end..k {
+                    self.sums[idx] += hlcvs[[t, idx, VOLUME]];
+                }
+            }
+        } else {
+            // Full recalculation needed (first call or gap exceeds window size)
+            let n_coins = self.sums.len();
+            for idx in 0..n_coins {
+                self.sums[idx] = hlcvs.slice(s![new_start..k, idx, VOLUME]).sum();
+            }
+        }
+        
+        self.window_start = new_start;
+        self.window_end = k;
+        
+        &self.sums
+    }
+    
+    /// Resets the calculator state, forcing a full recalculation on next update.
+    pub fn reset(&mut self) {
+        for sum in &mut self.sums {
+            *sum = 0.0;
+        }
+        self.window_start = 0;
+        self.window_end = 0;
+    }
+    
+    /// Returns the current rolling sums without updating.
+    pub fn get_sums(&self) -> &[f64] {
+        &self.sums
+    }
+    
+    /// Returns the current window size.
+    pub fn get_window_size(&self) -> usize {
+        self.window_size
+    }
+    
+    /// Returns the number of coins being tracked.
+    pub fn n_coins(&self) -> usize {
+        self.sums.len()
+    }
 }
 
 pub struct Backtest<'a> {
@@ -145,7 +252,8 @@ pub struct Backtest<'a> {
     did_fill_short: HashSet<usize>,
     n_eligible_long: usize,
     n_eligible_short: usize,
-    rolling_volume_sum: RollingVolumeSum,
+    rolling_volume_long: IncrementalRollingVolume,
+    rolling_volume_short: IncrementalRollingVolume,
     volume_indices_buffer: Option<Vec<(f64, usize)>>,
     pub bankruptcy_timestamp: Option<usize>,
     pub bankruptcy_reason: i32,  // 0=none, 1=financial, 2=drawdown, 3=no_positions, 4=stale_position
@@ -159,6 +267,20 @@ pub struct Backtest<'a> {
     // Drawdown tracking for bankruptcy
     peak_equity: f64,
     current_drawdown: f64,
+    
+    // Pre-allocated buffers for hot loop (Requirements 5.1, 6.1)
+    long_keys_buffer: Vec<usize>,
+    short_keys_buffer: Vec<usize>,
+    long_keys_dirty: bool,
+    short_keys_dirty: bool,
+    
+    // Pre-allocated buffers for check_for_fills
+    temp_closes: Vec<Order>,
+    temp_entries: Vec<Order>,
+    open_orders_keys_buffer: Vec<usize>,
+    
+    // Pre-allocated buffer for noisiness calculation (Requirements 8.1, 8.3)
+    noisinesses_buffer: Vec<(f64, usize)>,
 }
 
 impl<'a> Backtest<'a> {
@@ -268,12 +390,14 @@ impl<'a> Backtest<'a> {
             did_fill_short: HashSet::new(),
             n_eligible_long,
             n_eligible_short,
-            rolling_volume_sum: RollingVolumeSum {
-                long: vec![0.0; n_coins],
-                short: vec![0.0; n_coins],
-                prev_k_long: 0,
-                prev_k_short: 0,
-            },
+            rolling_volume_long: IncrementalRollingVolume::new(
+                n_coins,
+                bot_params_pair.long.filter_rolling_window,
+            ),
+            rolling_volume_short: IncrementalRollingVolume::new(
+                n_coins,
+                bot_params_pair.short.filter_rolling_window,
+            ),
             volume_indices_buffer: Some(vec![(0.0, 0); n_coins]), // Initialize here
             bankruptcy_timestamp: None,
             bankruptcy_reason: 0,  // 0=none
@@ -287,6 +411,23 @@ impl<'a> Backtest<'a> {
             // Initialize drawdown tracking
             peak_equity: backtest_params.starting_balance,
             current_drawdown: 0.0,
+            
+            // Initialize pre-allocated buffers for hot loop (Requirements 5.1, 6.1)
+            // Capacity based on n_coins since that's the maximum number of positions
+            long_keys_buffer: Vec::with_capacity(n_coins),
+            short_keys_buffer: Vec::with_capacity(n_coins),
+            long_keys_dirty: true,  // Start dirty to force initial population
+            short_keys_dirty: true,
+            
+            // Pre-allocated buffers for check_for_fills
+            // Typical order count per coin is small, so 8 is a reasonable initial capacity
+            temp_closes: Vec::with_capacity(8),
+            temp_entries: Vec::with_capacity(8),
+            open_orders_keys_buffer: Vec::with_capacity(n_coins),
+            
+            // Pre-allocated buffer for noisiness calculation (Requirements 8.1, 8.3)
+            // Capacity based on n_coins since that's the maximum number of eligible coins
+            noisinesses_buffer: Vec::with_capacity(n_coins),
         }
     }
 
@@ -317,62 +458,51 @@ impl<'a> Backtest<'a> {
         let window = bot_params.filter_rolling_window;
         let start_k = k.saturating_sub(window);
 
-        let (rolling_volume_sum, prev_k) = match pside {
-            LONG => (
-                &mut self.rolling_volume_sum.long,
-                &mut self.rolling_volume_sum.prev_k_long,
-            ),
-            SHORT => (
-                &mut self.rolling_volume_sum.short,
-                &mut self.rolling_volume_sum.prev_k_short,
-            ),
+        // Use IncrementalRollingVolume for optimized rolling sum calculation
+        // Requirements: 7.1, 7.2, 7.3, 7.4
+        let rolling_sums = match pside {
+            LONG => self.rolling_volume_long.update(k, &self.hlcvs),
+            SHORT => self.rolling_volume_short.update(k, &self.hlcvs),
             _ => panic!("Invalid pside"),
         };
 
         // Use the pre-allocated buffer for volume indices
         let volume_indices = self.volume_indices_buffer.as_mut().unwrap();
 
-        // Update rolling volume sums
-        if k > window && k - *prev_k < window {
-            // Rolling calculation
-            let safe_start = (*prev_k).saturating_sub(window);
-            for idx in 0..self.n_coins {
-                rolling_volume_sum[idx] -=
-                    self.hlcvs.slice(s![safe_start..start_k, idx, VOLUME]).sum();
-                rolling_volume_sum[idx] += self.hlcvs.slice(s![*prev_k..k, idx, VOLUME]).sum();
-                volume_indices[idx] = (rolling_volume_sum[idx], idx);
-            }
-        } else {
-            // Full calculation
-            for idx in 0..self.n_coins {
-                rolling_volume_sum[idx] = self.hlcvs.slice(s![start_k..k, idx, VOLUME]).sum();
-                volume_indices[idx] = (rolling_volume_sum[idx], idx);
-            }
+        // Copy rolling sums to volume indices buffer
+        for idx in 0..self.n_coins {
+            volume_indices[idx] = (rolling_sums[idx], idx);
         }
-        *prev_k = k;
 
         // Sort by volume in descending order
         volume_indices.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
-        // Calculate noisiness for top n_eligible coins
+        // Calculate noisiness for top n_eligible coins using direct indexing
+        // Requirements: 8.1, 8.2, 8.3
         let actual_n_eligible = n_eligible.min(self.n_coins);
-        let mut noisinesses = Vec::with_capacity(actual_n_eligible);
-
+        
+        // Reuse pre-allocated noisinesses buffer (Requirement 8.3)
+        self.noisinesses_buffer.clear();
+        
         for &(_, idx) in volume_indices.iter().take(actual_n_eligible) {
-            let noisiness: f64 = self
-                .hlcvs
-                .slice(s![start_k..k, idx, ..])
-                .axis_iter(Axis(0))
-                .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
-                .sum();
-            noisinesses.push((noisiness, idx));
+            let mut noisiness = 0.0;
+            
+            // Direct array indexing instead of iterator chain (Requirement 8.2)
+            for t in start_k..k {
+                let high = self.hlcvs[[t, idx, HIGH]];
+                let low = self.hlcvs[[t, idx, LOW]];
+                let close = self.hlcvs[[t, idx, CLOSE]];
+                noisiness += (high - low) / close;
+            }
+            
+            self.noisinesses_buffer.push((noisiness, idx));
         }
 
-        // Sort by noisiness in descending order
-        noisinesses.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+        // Sort by noisiness in descending order (in place)
+        self.noisinesses_buffer.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
         // Return indices sorted by noisiness
-        noisinesses.into_iter().map(|(_, idx)| idx).collect()
+        self.noisinesses_buffer.iter().map(|&(_, idx)| idx).collect()
     }
     fn check_strategy_inactivity(&mut self, k: usize) -> bool {
         let hours_since_start = k / 60; // minutes to hours
@@ -467,9 +597,8 @@ impl<'a> Backtest<'a> {
         check_points.extend((0..7).map(|i| i * 60 * 24));
         let n_timesteps = self.hlcvs.shape()[0];
 
-        // Pre-allocate collections to avoid repeated allocations
-        let mut temp_closes = Vec::with_capacity(10);
-        let mut temp_entries = Vec::with_capacity(10);
+        // Note: temp_closes, temp_entries, and open_orders_keys_buffer are pre-allocated
+        // in the Backtest struct and reused throughout the main loop (Requirements 6.2, 6.3)
 
         for idx in 0..self.n_coins {
             self.trailing_prices
@@ -509,14 +638,19 @@ impl<'a> Backtest<'a> {
             self.did_fill_long.clear();
             
             if self.trading_enabled.long {
-                let mut open_orders_keys_long: Vec<usize> = Vec::with_capacity(self.open_orders.long.len());
-                open_orders_keys_long.extend(self.open_orders.long.keys().cloned());
-                open_orders_keys_long.sort_unstable(); // Faster than stable sort
+                // Reuse pre-allocated open_orders_keys_buffer (Requirement 6.3)
+                self.open_orders_keys_buffer.clear();
+                self.open_orders_keys_buffer.extend(self.open_orders.long.keys().cloned());
+                self.open_orders_keys_buffer.sort_unstable(); // Faster than stable sort
                 
-                for idx in open_orders_keys_long {
-                    // Process close fills long - reuse temp vector
+                // Need to iterate by index since we're borrowing self mutably later
+                let n_keys = self.open_orders_keys_buffer.len();
+                for key_idx in 0..n_keys {
+                    let idx = self.open_orders_keys_buffer[key_idx];
+                    
+                    // Process close fills long - reuse pre-allocated temp_closes (Requirement 6.2)
                     if !self.open_orders.long[&idx].closes.is_empty() {
-                        temp_closes.clear();
+                        self.temp_closes.clear();
                         for close_order in &self.open_orders.long[&idx].closes {
                             // Inline order_filled check
                             let filled = if close_order.qty > 0.0 {
@@ -528,22 +662,26 @@ impl<'a> Backtest<'a> {
                             };
                             
                             if filled {
-                                temp_closes.push(close_order.clone());
+                                self.temp_closes.push(close_order.clone());
                             }
                         }
                         
-                        for order in &temp_closes {
+                        // Process collected closes
+                        let n_closes = self.temp_closes.len();
+                        for close_idx in 0..n_closes {
                             if self.positions.long.contains_key(&idx) {
                                 self.did_fill_long.insert(idx);
                                 self.reset_trailing_prices(idx, LONG);
-                                self.process_close_fill_long(k, idx, order);
+                                // Clone the order to avoid borrow issues
+                                let order = self.temp_closes[close_idx].clone();
+                                self.process_close_fill_long(k, idx, &order);
                             }
                         }
                     }
                     
-                    // Process entry fills long - reuse temp vector
+                    // Process entry fills long - reuse pre-allocated temp_entries (Requirement 6.2)
                     if !self.open_orders.long[&idx].entries.is_empty() {
-                        temp_entries.clear();
+                        self.temp_entries.clear();
                         for entry_order in &self.open_orders.long[&idx].entries {
                             // Inline order_filled check
                             let filled = if entry_order.qty > 0.0 {
@@ -555,14 +693,18 @@ impl<'a> Backtest<'a> {
                             };
                             
                             if filled {
-                                temp_entries.push(entry_order.clone());
+                                self.temp_entries.push(entry_order.clone());
                             }
                         }
                         
-                        for order in &temp_entries {
+                        // Process collected entries
+                        let n_entries = self.temp_entries.len();
+                        for entry_idx in 0..n_entries {
                             self.did_fill_long.insert(idx);
                             self.reset_trailing_prices(idx, LONG);
-                            self.process_entry_fill_long(k, idx, order);
+                            // Clone the order to avoid borrow issues
+                            let order = self.temp_entries[entry_idx].clone();
+                            self.process_entry_fill_long(k, idx, &order);
                         }
                     }
                 }
@@ -674,15 +816,69 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    /// Ensures the long keys buffer is up-to-date, recomputing only when dirty.
+    /// This avoids repeated allocations and sorts in the hot loop.
+    /// Requirements: 5.2, 5.3
+    fn ensure_long_keys_sorted(&mut self) {
+        if self.long_keys_dirty {
+            self.long_keys_buffer.clear();
+            self.long_keys_buffer.extend(self.positions.long.keys());
+            self.long_keys_buffer.sort_unstable();
+            self.long_keys_dirty = false;
+        }
+    }
+    
+    /// Returns cached sorted long position keys as a slice.
+    /// Call ensure_long_keys_sorted() first to ensure the buffer is up-to-date.
+    /// Requirements: 5.2, 5.4
+    fn get_sorted_long_keys(&self) -> &[usize] {
+        &self.long_keys_buffer
+    }
+    
+    /// Ensures the short keys buffer is up-to-date, recomputing only when dirty.
+    /// This avoids repeated allocations and sorts in the hot loop.
+    /// Requirements: 5.2, 5.3
+    fn ensure_short_keys_sorted(&mut self) {
+        if self.short_keys_dirty {
+            self.short_keys_buffer.clear();
+            self.short_keys_buffer.extend(self.positions.short.keys());
+            self.short_keys_buffer.sort_unstable();
+            self.short_keys_dirty = false;
+        }
+    }
+    
+    /// Returns cached sorted short position keys as a slice.
+    /// Call ensure_short_keys_sorted() first to ensure the buffer is up-to-date.
+    /// Requirements: 5.2, 5.4
+    fn get_sorted_short_keys(&self) -> &[usize] {
+        &self.short_keys_buffer
+    }
+    
+    /// Marks the long keys buffer as dirty, triggering a re-sort on next access.
+    /// Call this whenever a long position is added or removed.
+    /// Requirements: 5.3
+    fn mark_long_keys_dirty(&mut self) {
+        self.long_keys_dirty = true;
+    }
+    
+    /// Marks the short keys buffer as dirty, triggering a re-sort on next access.
+    /// Call this whenever a short position is added or removed.
+    /// Requirements: 5.3
+    fn mark_short_keys_dirty(&mut self) {
+        self.short_keys_dirty = true;
+    }
+
     fn update_equities(&mut self, k: usize) {
         // Start with the “running totals” in our Balance struct
         let mut equity_usd = self.balance.usd_total;
         let mut equity_btc = self.balance.btc_total;
 
         // Add the unrealized PNL of all positions
-        let mut long_keys: Vec<usize> = self.positions.long.keys().cloned().collect();
-        long_keys.sort();
-        for idx in long_keys {
+        // Use pre-allocated and cached sorted keys (Requirements 5.2, 5.4)
+        // First ensure buffers are up-to-date, then iterate without allocation
+        self.ensure_long_keys_sorted();
+        for i in 0..self.long_keys_buffer.len() {
+            let idx = self.long_keys_buffer[i];
             let position = &self.positions.long[&idx];
             let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_long(
@@ -695,9 +891,9 @@ impl<'a> Backtest<'a> {
             equity_btc += upnl / self.btc_usd_prices[k];
         }
 
-        let mut short_keys: Vec<usize> = self.positions.short.keys().cloned().collect();
-        short_keys.sort();
-        for idx in short_keys {
+        self.ensure_short_keys_sorted();
+        for i in 0..self.short_keys_buffer.len() {
+            let idx = self.short_keys_buffer[i];
             let position = &self.positions.short[&idx];
             let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_short(
@@ -803,41 +999,51 @@ impl<'a> Backtest<'a> {
         // Skip short clearing since it's always disabled
         
         if self.trading_enabled.long {
-            let mut open_orders_keys_long: Vec<usize> = Vec::with_capacity(self.open_orders.long.len());
-            open_orders_keys_long.extend(self.open_orders.long.keys().cloned());
-            open_orders_keys_long.sort();
-            for idx in open_orders_keys_long {
-                // Process close fills long
+            // Reuse pre-allocated open_orders_keys_buffer (Requirement 6.3)
+            self.open_orders_keys_buffer.clear();
+            self.open_orders_keys_buffer.extend(self.open_orders.long.keys().cloned());
+            self.open_orders_keys_buffer.sort();
+            
+            // Need to iterate by index since we're borrowing self mutably later
+            let n_keys = self.open_orders_keys_buffer.len();
+            for key_idx in 0..n_keys {
+                let idx = self.open_orders_keys_buffer[key_idx];
+                
+                // Process close fills long - reuse pre-allocated temp_closes (Requirement 6.2)
                 if !self.open_orders.long[&idx].closes.is_empty() {
-                    let mut closes_to_process = Vec::with_capacity(self.open_orders.long[&idx].closes.len());
-                    {
-                        for close_order in &self.open_orders.long[&idx].closes {
-                            if self.order_filled(k, idx, close_order) {
-                                closes_to_process.push(close_order.clone());
-                            }
+                    self.temp_closes.clear();
+                    for close_order in &self.open_orders.long[&idx].closes {
+                        if self.order_filled(k, idx, close_order) {
+                            self.temp_closes.push(close_order.clone());
                         }
                     }
-                    for order in closes_to_process {
+                    
+                    // Process collected closes
+                    let n_closes = self.temp_closes.len();
+                    for close_idx in 0..n_closes {
                         if self.positions.long.contains_key(&idx) {
                             self.did_fill_long.insert(idx);
                             self.reset_trailing_prices(idx, LONG);
+                            let order = self.temp_closes[close_idx].clone();
                             self.process_close_fill_long(k, idx, &order);
                         }
                     }
                 }
-                // Process entry fills long
+                // Process entry fills long - reuse pre-allocated temp_entries (Requirement 6.2)
                 if !self.open_orders.long[&idx].entries.is_empty() {
-                    let mut entries_to_process = Vec::with_capacity(self.open_orders.long[&idx].entries.len());
-                    {
-                        for entry_order in &self.open_orders.long[&idx].entries {
-                            if self.order_filled(k, idx, entry_order) {
-                                entries_to_process.push(entry_order.clone());
-                            }
+                    self.temp_entries.clear();
+                    for entry_order in &self.open_orders.long[&idx].entries {
+                        if self.order_filled(k, idx, entry_order) {
+                            self.temp_entries.push(entry_order.clone());
                         }
                     }
-                    for order in entries_to_process {
+                    
+                    // Process collected entries
+                    let n_entries = self.temp_entries.len();
+                    for entry_idx in 0..n_entries {
                         self.did_fill_long.insert(idx);
                         self.reset_trailing_prices(idx, LONG);
+                        let order = self.temp_entries[entry_idx].clone();
                         self.process_entry_fill_long(k, idx, &order);
                     }
                 }
@@ -918,6 +1124,8 @@ impl<'a> Backtest<'a> {
         let current_pprice = self.positions.long[&idx].price;
         if new_psize == 0.0 {
             self.positions.long.remove(&idx);
+            // Mark long keys dirty since position was removed (Requirements 5.3)
+            self.mark_long_keys_dirty();
             // Position fully closed - set timestamp to None
             self.position_timestamps.insert(idx, None);
         } else {
@@ -970,6 +1178,8 @@ impl<'a> Backtest<'a> {
         let current_pprice = self.positions.short[&idx].price;
         if new_psize == 0.0 {
             self.positions.short.remove(&idx);
+            // Mark short keys dirty since position was removed (Requirements 5.3)
+            self.mark_short_keys_dirty();
             // Position fully closed - set timestamp to None
             self.position_timestamps.insert(idx, None);
         } else {
@@ -1003,6 +1213,9 @@ impl<'a> Backtest<'a> {
         ) * self.backtest_params.maker_fee;
         self.update_balance(k, 0.0, fee_paid);
 
+        // Check if this is a new position (mark dirty if so)
+        let is_new_position = !self.positions.long.contains_key(&idx);
+        
         let position_entry = self
             .positions
             .long
@@ -1017,6 +1230,11 @@ impl<'a> Backtest<'a> {
         );
         self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
+        
+        // Mark long keys dirty if a new position was created (Requirements 5.3)
+        if is_new_position {
+            self.mark_long_keys_dirty();
+        }
         self.fills.push(Fill {
             index: k,                                        // index minute
             coin: self.backtest_params.coins[idx].clone(),   // coin
@@ -1045,6 +1263,10 @@ impl<'a> Backtest<'a> {
             self.exchange_params_list[idx].c_mult,
         ) * self.backtest_params.maker_fee;
         self.update_balance(k, 0.0, fee_paid);
+        
+        // Check if this is a new position (mark dirty if so)
+        let is_new_position = !self.positions.short.contains_key(&idx);
+        
         let position_entry = self
             .positions
             .short
@@ -1059,6 +1281,12 @@ impl<'a> Backtest<'a> {
         );
         self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         self.positions.short.get_mut(&idx).unwrap().price = new_pprice;
+        
+        // Mark short keys dirty if a new position was created (Requirements 5.3)
+        if is_new_position {
+            self.mark_short_keys_dirty();
+        }
+        
         self.fills.push(Fill {
             index: k,                                         // index minute
             coin: self.backtest_params.coins[idx].clone(),    // coin
@@ -1745,18 +1973,19 @@ impl<'a> Backtest<'a> {
     fn update_emas(&mut self, k: usize) {
         for i in 0..self.n_coins {
             let close_price = self.hlcvs[[k, i, CLOSE]];
-
-            let long_alphas = &self.ema_alphas.long.alphas;
-            let long_alphas_inv = &self.ema_alphas.long.alphas_inv;
-            let short_alphas = &self.ema_alphas.short.alphas;
-            let short_alphas_inv = &self.ema_alphas.short.alphas_inv;
-
             let emas = &mut self.emas[i];
-
-            for z in 0..3 {
-                emas.long[z] = close_price * long_alphas[z] + emas.long[z] * long_alphas_inv[z];
-                emas.short[z] = close_price * short_alphas[z] + emas.short[z] * short_alphas_inv[z];
-            }
+            
+            // Unrolled loop for 3 EMA levels for both long and short
+            // This is bit-for-bit identical to the loop but avoids the loop overhead
+            // and allows the compiler to better vectorize the arithmetic
+            emas.long[0] = close_price * self.ema_alphas.long.alphas[0] + emas.long[0] * self.ema_alphas.long.alphas_inv[0];
+            emas.short[0] = close_price * self.ema_alphas.short.alphas[0] + emas.short[0] * self.ema_alphas.short.alphas_inv[0];
+            
+            emas.long[1] = close_price * self.ema_alphas.long.alphas[1] + emas.long[1] * self.ema_alphas.long.alphas_inv[1];
+            emas.short[1] = close_price * self.ema_alphas.short.alphas[1] + emas.short[1] * self.ema_alphas.short.alphas_inv[1];
+            
+            emas.long[2] = close_price * self.ema_alphas.long.alphas[2] + emas.long[2] * self.ema_alphas.long.alphas_inv[2];
+            emas.short[2] = close_price * self.ema_alphas.short.alphas[2] + emas.short[2] * self.ema_alphas.short.alphas_inv[2];
         }
     }
 }
@@ -1792,6 +2021,20 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             alphas_inv: ema_alphas_short_inv,
         },
     }
+}
+
+/// Helper function for NaN-safe float comparison (used in sorting)
+#[inline]
+fn nan_safe_cmp(a: &f64, b: &f64) -> Ordering {
+    a.partial_cmp(b).unwrap_or_else(|| {
+        if a.is_nan() && b.is_nan() {
+            Ordering::Equal
+        } else if a.is_nan() {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        }
+    })
 }
 
 fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timestamp: Option<usize>, bankruptcy_reason: i32) -> Analysis {
@@ -1853,19 +2096,12 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
         0.0
     };
 
+    // OPTIMIZATION: Sort daily_eqs_pct_change once and reuse for mdg and expected_shortfall_1pct
+    // Requirements: 9.1, 9.2, 9.3 - Sort once and reuse sorted order, single-pass algorithms
+    let mut sorted_pct_change = daily_eqs_pct_change.clone();
+    sorted_pct_change.sort_by(nan_safe_cmp);
+
     let mdg = {
-        let mut sorted_pct_change = daily_eqs_pct_change.clone();
-        sorted_pct_change.sort_by(|a, b| {
-            a.partial_cmp(b).unwrap_or_else(|| {
-                if a.is_nan() && b.is_nan() {
-                    Ordering::Equal
-                } else if a.is_nan() {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
-            })
-        });
         if sorted_pct_change.len() % 2 == 0 {
             (sorted_pct_change[sorted_pct_change.len() / 2 - 1]
                 + sorted_pct_change[sorted_pct_change.len() / 2])
@@ -1921,47 +2157,29 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
         f64::INFINITY
     };
 
-    // Calculate Expected Shortfall (99%)
+    // OPTIMIZATION: Reuse sorted_pct_change from mdg calculation instead of sorting again
+    // Requirements: 9.1, 9.3 - Sort once and reuse sorted order
     let expected_shortfall_1pct = {
-        let mut sorted_returns = daily_eqs_pct_change.clone();
-        sorted_returns.sort_by(|a, b| {
-            a.partial_cmp(b).unwrap_or_else(|| {
-                if a.is_nan() && b.is_nan() {
-                    Ordering::Equal
-                } else if a.is_nan() {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
-            })
-        });
         let cutoff_index = (daily_eqs_pct_change.len() as f64 * 0.01) as usize;
         if cutoff_index > 0 {
-            sorted_returns[..cutoff_index]
+            sorted_pct_change[..cutoff_index]
                 .iter()
                 .map(|x| x.abs())
                 .sum::<f64>()
                 / cutoff_index as f64
         } else {
-            sorted_returns[0].abs()
+            sorted_pct_change[0].abs()
         }
     };
 
     // Calculate drawdowns
+    // OPTIMIZATION: Sort drawdowns once and reuse for both drawdown_worst and drawdown_worst_mean_1pct
+    // Requirements: 9.1, 9.3 - Sort once and reuse sorted order
     let drawdowns = calc_drawdowns(&daily_eqs);
+    let mut sorted_drawdowns = drawdowns.clone();
+    sorted_drawdowns.sort_by(nan_safe_cmp);
+    
     let drawdown_worst_mean_1pct = {
-        let mut sorted_drawdowns = drawdowns.clone();
-        sorted_drawdowns.sort_by(|a, b| {
-            a.partial_cmp(b).unwrap_or_else(|| {
-                if a.is_nan() && b.is_nan() {
-                    Ordering::Equal
-                } else if a.is_nan() {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
-            })
-        });
         let cutoff_index = std::cmp::max(1, (sorted_drawdowns.len() as f64 * 0.01) as usize);
         let worst_n = std::cmp::min(cutoff_index, sorted_drawdowns.len());
         sorted_drawdowns[..worst_n]
@@ -1970,10 +2188,11 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
             .sum::<f64>()
             / worst_n as f64
     };
-    let drawdown_worst = drawdowns
-        .iter()
-        .fold(f64::NEG_INFINITY, |a, &b| f64::max(a, b.abs()));
     
+    // OPTIMIZATION: Get drawdown_worst from sorted array - worst (most negative) is at index 0
+    // The absolute value of the first element gives us the worst drawdown
+    // Requirements: 9.2, 9.3 - Single-pass algorithms, reuse sorted order
+    let drawdown_worst = sorted_drawdowns.first().map_or(0.0, |&x| x.abs());
 
 
     // Calculate Sterling Ratio (using average of worst 1% drawdowns)
@@ -2037,29 +2256,27 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
 
     let gain = fills[fills.len() - 1].balance_usd_total / fills[0].balance_usd_total;
 
-    // Calculate profit factor
-    let (total_profit, total_loss) = fills.iter().fold((0.0, 0.0), |(profit, loss), fill| {
-        if fill.pnl > 0.0 {
-            (profit + fill.pnl, loss)
-        } else {
-            (profit, loss + fill.pnl.abs())
-        }
-    });
-    let loss_profit_ratio = if total_profit == 0.0 {
-        f64::INFINITY
-    } else {
-        total_loss / total_profit
-    };
-
-    // Calculate position durations, unchanged durations, and time in market %
+    // OPTIMIZATION: Single-pass computation of profit/loss AND position tracking
+    // Requirements: 9.2 - Use single-pass algorithms for multiple metrics
     let total_indices = fills.last().map_or(0, |f| f.index + 1); // total bars
     let mut in_market_flags = vec![false; total_indices]; // Tracks market exposure
     let mut positions_opened: HashMap<String, usize> = HashMap::new(); // Tracks position open time
     let mut durations: Vec<usize> = Vec::new(); // Total position durations
     let mut last_fill_time: HashMap<String, usize> = HashMap::new(); // Last fill time per position
     let mut unchanged_durations: Vec<usize> = Vec::new(); // Durations of unchanged periods
+    
+    // Profit/loss accumulators (combined into single pass)
+    let mut total_profit = 0.0;
+    let mut total_loss = 0.0;
 
     for fill in fills {
+        // Accumulate profit/loss in the same pass
+        if fill.pnl > 0.0 {
+            total_profit += fill.pnl;
+        } else {
+            total_loss += fill.pnl.abs();
+        }
+        
         let side = if fill.order_type.to_string().contains("long") {
             "long"
         } else {
@@ -2111,6 +2328,13 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
         }
     }
 
+    // Calculate loss_profit_ratio from accumulated values
+    let loss_profit_ratio = if total_profit == 0.0 {
+        f64::INFINITY
+    } else {
+        total_loss / total_profit
+    };
+
     // Calculate time in market percent
     let time_in_market_count = in_market_flags.iter().filter(|&&b| b).count();
     let time_in_market_percent = 100.0 * time_in_market_count as f64 / total_indices as f64;
@@ -2125,23 +2349,26 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, bankruptcy_timest
         0.0
     };
 
-    let position_held_hours_max = if !durations.is_empty() {
-        *durations.iter().max().unwrap() as f64 / 60.0
-    } else {
-        0.0
-    };
-
-    let position_held_hours_median = if !durations.is_empty() {
+    // OPTIMIZATION: Sort durations once and reuse for both max and median
+    // Requirements: 9.1, 9.3 - Sort once and reuse sorted order
+    let (position_held_hours_max, position_held_hours_median) = if !durations.is_empty() {
         let mut sorted_durations = durations.clone();
         sorted_durations.sort_unstable();
+        
+        // Get max from last element of sorted array
+        let max_hours = *sorted_durations.last().unwrap() as f64 / 60.0;
+        
+        // Calculate median from sorted array
         let mid = sorted_durations.len() / 2;
-        if sorted_durations.len() % 2 == 0 {
+        let median_hours = if sorted_durations.len() % 2 == 0 {
             (sorted_durations[mid - 1] + sorted_durations[mid]) as f64 / (2.0 * 60.0)
         } else {
             sorted_durations[mid] as f64 / 60.0
-        }
+        };
+        
+        (max_hours, median_hours)
     } else {
-        0.0
+        (0.0, 0.0)
     };
 
     let position_unchanged_hours_max = if !unchanged_durations.is_empty() {

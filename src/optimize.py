@@ -323,10 +323,27 @@ class Evaluator:
         return w_0, w_1, not write_to_file
 
     def combine_analyses(self, analyses):
+        """Combine analyses with optimized dictionary access.
+
+        Optimizations:
+        - Cache keys from first analysis (all analyses have same keys)
+        - Cache exchange list to avoid repeated iteration
+        - Use numpy vectorized operations for statistics
+
+        Requirements: 4.1, 4.3
+        """
         analyses_combined = {}
-        keys = analyses[next(iter(analyses))].keys()
+
+        # Cache keys from first analysis (all analyses have same keys)
+        first_exchange = next(iter(analyses))
+        keys = list(analyses[first_exchange].keys())
+
+        # Pre-extract exchange list for direct access
+        exchange_list = list(analyses.keys())
+
         for key in keys:
-            values = [analysis[key] for analysis in analyses.values()]
+            # Direct access instead of repeated lookups
+            values = [analyses[ex][key] for ex in exchange_list]
 
             # Special handling for bankruptcy_timestamp - only set if actually bankrupt
             if key == "bankruptcy_timestamp":
@@ -365,8 +382,8 @@ class Evaluator:
 
             elif (
                 not values
-                or any([x == np.inf for x in values])
-                or any([x is None for x in values])
+                or any(x == np.inf for x in values)
+                or any(x is None for x in values)
             ):
                 analyses_combined[f"{key}_mean"] = 0.0
                 analyses_combined[f"{key}_min"] = 0.0
@@ -374,10 +391,12 @@ class Evaluator:
                 analyses_combined[f"{key}_std"] = 0.0
             else:
                 try:
-                    analyses_combined[f"{key}_mean"] = np.mean(values)
-                    analyses_combined[f"{key}_min"] = np.min(values)
-                    analyses_combined[f"{key}_max"] = np.max(values)
-                    analyses_combined[f"{key}_std"] = np.std(values)
+                    # Use numpy for vectorized statistics
+                    arr = np.array(values, dtype=np.float64)
+                    analyses_combined[f"{key}_mean"] = np.mean(arr)
+                    analyses_combined[f"{key}_min"] = np.min(arr)
+                    analyses_combined[f"{key}_max"] = np.max(arr)
+                    analyses_combined[f"{key}_std"] = np.std(arr)
                 except Exception as e:
                     print("\n\n debug\n\n")
                     print("key, values", key, values)
@@ -718,12 +737,14 @@ class Evaluator:
         #     # "Unchg Max":        3,
         # }
         scaling_values = {
-            "DD Worst": -99,
-            "DD 1%": -99,
-            "Gain": 0,
-            "R²": 1,
-            "Days w/o Pos": 0,
-            "Days Stale": 0,
+            "DD Worst":         -99,
+            "DD 1%":            -99,
+            "Gain":             0,
+            "Calmar":           0,
+            "Sortino":          0,
+            "R²":               1,
+            "Days w/o Pos":     0,
+            "Days Stale":       0,
         }
         for result in results:
             key = result["key"]
@@ -1248,7 +1269,13 @@ async def myMain(args):
         config["optimize"]["population_size"] = nstart
 
     # Use LHS for initial population creation
-    pop_size = config["optimize"]["population_size"]
+    # If dynamic_population is enabled, use pop_max for initial population
+    dynamic_pop_config = config["optimize"].get("dynamic_population", {})
+    if dynamic_pop_config.get("enabled", False):
+        pop_size = dynamic_pop_config.get("pop_max", config["optimize"]["population_size"])
+        logging.info(f"Dynamic population enabled: using pop_max={pop_size} for initial population")
+    else:
+        pop_size = config["optimize"]["population_size"]
     
     # Separate variable and fixed parameters (LHS requires lower < upper)
     param_names = list(param_bounds.keys())

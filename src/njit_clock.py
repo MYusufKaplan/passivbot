@@ -40,17 +40,17 @@ else:
     from numba import njit
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_clock_price_bid(lower_ema_band, highest_bid, ema_dist_lower, price_step):
     return min(highest_bid, round_dn(lower_ema_band * (1 - ema_dist_lower), price_step))
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_clock_price_ask(upper_ema_band, lowest_ask, ema_dist_upper, price_step):
     return max(lowest_ask, round_up(upper_ema_band * (1 + ema_dist_upper), price_step))
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_clock_entry_long(
     balance: float,
     psize_long: float,
@@ -127,7 +127,7 @@ def calc_clock_entry_long(
     return (0.0, 0.0, "clock_entry_long", 0.0, 0.0)
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_clock_close_long(
     balance: float,
     psize_long: float,
@@ -182,7 +182,7 @@ def calc_clock_close_long(
     return (0.0, 0.0, "clock_close_long")
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_clock_entry_short(
     balance: float,
     psize_short: float,
@@ -263,7 +263,7 @@ def calc_clock_entry_short(
     return (0.0, 0.0, "clock_entry_short", 0.0, 0.0)
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_clock_close_short(
     balance: float,
     psize_short: float,
@@ -322,7 +322,7 @@ def calc_clock_close_short(
     return (0.0, 0.0, "clock_close_short")
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def backtest_clock(
     hlc,
     starting_balance,

@@ -42,7 +42,7 @@ else:
     from numba import njit
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_neat_grid_long(
     balance,
     psize,
@@ -150,7 +150,7 @@ def calc_neat_grid_long(
     return entries if entries else [(0.0, 0.0, "")]
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_neat_grid_short(
     balance,
     psize,
@@ -259,7 +259,7 @@ def calc_neat_grid_short(
     return entries if entries else [(0.0, 0.0, "")]
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def approximate_neat_grid_long(
     balance,
     psize,
@@ -343,7 +343,7 @@ def approximate_neat_grid_long(
     return grid[k:] if crop else grid
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def approximate_neat_grid_short(
     balance,
     psize,
@@ -431,7 +431,7 @@ def approximate_neat_grid_short(
     return grid[k:] if crop else grid
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def eval_neat_entry_grid_long(
     balance,
     initial_entry_price,
@@ -492,7 +492,7 @@ def eval_neat_entry_grid_long(
     return grid
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def eval_neat_entry_grid_short(
     balance,
     initial_entry_price,
@@ -553,7 +553,7 @@ def eval_neat_entry_grid_short(
     return grid
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def find_last_entry_qty_long(
     balance,
     initial_entry_price,
@@ -641,7 +641,7 @@ def find_last_entry_qty_long(
     )
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def find_last_entry_qty_short(
     balance,
     initial_entry_price,
@@ -729,7 +729,7 @@ def find_last_entry_qty_short(
     )
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_whole_neat_entry_grid_long(
     balance,
     initial_entry_price,
@@ -782,7 +782,7 @@ def calc_whole_neat_entry_grid_long(
     )
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def calc_whole_neat_entry_grid_short(
     balance,
     initial_entry_price,
@@ -835,7 +835,7 @@ def calc_whole_neat_entry_grid_short(
     )
 
 
-@njit
+@njit(cache=True, fastmath=True)
 def backtest_neat_grid(
     ticks,
     starting_balance,

@@ -1226,20 +1226,30 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
 
     # ---------------------------------------------------------------
     # 6) Unify across coins into a single (n_timestamps, n_coins, 4) array
-    #    We'll unify on 1m timestamps from the earliest to latest across all chosen coins
+    #    Use config date range, not data bounds, to ensure full coverage
     # ---------------------------------------------------------------
-    global_start_time = min(df.timestamp.iloc[0] for df in chosen_data_per_coin.values())
-    global_end_time = max(df.timestamp.iloc[-1] for df in chosen_data_per_coin.values())
+    # Use config dates as the authoritative range
+    global_start_time = start_ts
+    global_end_time = end_ts
+    
+    # Log if actual data doesn't cover the full range
+    actual_data_start = min(df.timestamp.iloc[0] for df in chosen_data_per_coin.values())
+    actual_data_end = max(df.timestamp.iloc[-1] for df in chosen_data_per_coin.values())
+    if actual_data_end < global_end_time:
+        logging.warning(
+            f"Data ends at {ts_to_date_utc(actual_data_end)} but config end_date is {end_date}. "
+            f"Missing {(global_end_time - actual_data_end) // 60000} minutes of data."
+        )
 
     timestamps = np.arange(global_start_time, global_end_time + 60000, 60000)
     n_timesteps = len(timestamps)
     valid_coins = sorted(chosen_data_per_coin.keys())
     n_coins = len(valid_coins)
-    # use at most last 60 days of date range to compute volume ratios
+    # use at most last 60 days of actual data range to compute volume ratios
     start_date_for_volume_ratios = ts_to_date_utc(
-        max(global_start_time, global_end_time - 1000 * 60 * 60 * 24 * 60)
+        max(global_start_time, actual_data_end - 1000 * 60 * 60 * 24 * 60)
     )
-    end_date_for_volume_ratios = ts_to_date_utc(global_end_time)
+    end_date_for_volume_ratios = ts_to_date_utc(actual_data_end)
 
     exchanges_with_data = sorted(set([chosen_mss_per_coin[coin]["exchange"] for coin in valid_coins]))
     exchange_volume_ratios = await compute_exchange_volume_ratios(

@@ -3,6 +3,7 @@ use crate::types::ExchangeParams;
 use pyo3::prelude::*;
 
 /// Rounds a number to the specified number of decimal places.
+#[inline]
 fn round_to_decimal_places(value: f64, decimal_places: usize) -> f64 {
     let multiplier = 10f64.powi(decimal_places as i32);
     (value * multiplier).round() / multiplier
@@ -10,6 +11,7 @@ fn round_to_decimal_places(value: f64, decimal_places: usize) -> f64 {
 
 /// Rounds up a number to the nearest multiple of the given step.
 #[pyfunction]
+#[inline]
 pub fn round_up(n: f64, step: f64) -> f64 {
     let result = (n / step).ceil() * step;
     round_to_decimal_places(result, 10)
@@ -17,6 +19,7 @@ pub fn round_up(n: f64, step: f64) -> f64 {
 
 /// Rounds a number to the nearest multiple of the given step.
 #[pyfunction]
+#[inline]
 pub fn round_(n: f64, step: f64) -> f64 {
     let result = (n / step).round() * step;
     round_to_decimal_places(result, 10)
@@ -24,12 +27,14 @@ pub fn round_(n: f64, step: f64) -> f64 {
 
 /// Rounds down a number to the nearest multiple of the given step.
 #[pyfunction]
+#[inline]
 pub fn round_dn(n: f64, step: f64) -> f64 {
     let result = (n / step).floor() * step;
     round_to_decimal_places(result, 10)
 }
 
 #[pyfunction]
+#[inline]
 pub fn round_dynamic(n: f64, d: i32) -> f64 {
     if n == 0.0 {
         return n;
@@ -41,6 +46,7 @@ pub fn round_dynamic(n: f64, d: i32) -> f64 {
 }
 
 #[pyfunction]
+#[inline]
 pub fn round_dynamic_up(n: f64, d: i32) -> f64 {
     if n == 0.0 {
         return n;
@@ -52,6 +58,7 @@ pub fn round_dynamic_up(n: f64, d: i32) -> f64 {
 }
 
 #[pyfunction]
+#[inline]
 pub fn round_dynamic_dn(n: f64, d: i32) -> f64 {
     if n == 0.0 {
         return n;
@@ -63,6 +70,7 @@ pub fn round_dynamic_dn(n: f64, d: i32) -> f64 {
 }
 
 #[pyfunction]
+#[inline]
 pub fn hysteresis_rounding(
     balance: f64,
     last_rounded_balance: f64,
@@ -82,6 +90,7 @@ pub fn hysteresis_rounding(
 }
 
 #[pyfunction]
+#[inline]
 pub fn calc_diff(x: f64, y: f64) -> f64 {
     if y == 0.0 {
         if x == 0.0 {
@@ -95,6 +104,7 @@ pub fn calc_diff(x: f64, y: f64) -> f64 {
 }
 
 #[pyfunction]
+#[inline]
 pub fn cost_to_qty(cost: f64, price: f64, c_mult: f64) -> f64 {
     if price > 0.0 {
         (cost.abs() / price) / c_mult
@@ -104,11 +114,13 @@ pub fn cost_to_qty(cost: f64, price: f64, c_mult: f64) -> f64 {
 }
 
 #[pyfunction]
+#[inline]
 pub fn qty_to_cost(qty: f64, price: f64, c_mult: f64) -> f64 {
     (qty.abs() * price) * c_mult
 }
 
 #[pyfunction]
+#[inline]
 pub fn calc_wallet_exposure(
     c_mult: f64,
     balance: f64,
@@ -121,6 +133,7 @@ pub fn calc_wallet_exposure(
     qty_to_cost(position_size, position_price, c_mult) / balance
 }
 
+#[inline]
 pub fn calc_wallet_exposure_if_filled(
     balance: f64,
     psize: f64,
@@ -137,6 +150,7 @@ pub fn calc_wallet_exposure_if_filled(
 }
 
 #[pyfunction]
+#[inline]
 pub fn calc_new_psize_pprice(
     psize: f64,
     pprice: f64,
@@ -160,6 +174,7 @@ pub fn calc_new_psize_pprice(
     )
 }
 
+#[inline]
 fn nan_to_0(value: f64) -> f64 {
     if value.is_nan() {
         0.0
@@ -168,6 +183,7 @@ fn nan_to_0(value: f64) -> f64 {
     }
 }
 
+#[inline]
 pub fn interpolate(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
     assert_eq!(xs.len(), ys.len(), "xs and ys must have the same length");
 
@@ -188,15 +204,18 @@ pub fn interpolate(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
 }
 
 #[pyfunction]
+#[inline]
 pub fn calc_pnl_long(entry_price: f64, close_price: f64, qty: f64, c_mult: f64) -> f64 {
     qty.abs() * c_mult * (close_price - entry_price)
 }
 
 #[pyfunction]
+#[inline]
 pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64) -> f64 {
     qty.abs() * c_mult * (entry_price - close_price)
 }
 
+#[inline]
 pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
     match pside {
         LONG => {
@@ -220,6 +239,7 @@ pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
 }
 
 #[pyfunction]
+#[inline]
 pub fn calc_auto_unstuck_allowance(
     balance: f64,
     loss_allowance_pct: f64,
@@ -233,6 +253,7 @@ pub fn calc_auto_unstuck_allowance(
     (balance_peak * (loss_allowance_pct + drop_since_peak_pct)).max(0.0)
 }
 
+#[inline]
 pub fn calc_ema_price_bid(
     price_step: f64,
     order_book_bid: f64,
@@ -245,6 +266,7 @@ pub fn calc_ema_price_bid(
     )
 }
 
+#[inline]
 pub fn calc_ema_price_ask(
     price_step: f64,
     order_book_ask: f64,

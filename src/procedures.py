@@ -1043,8 +1043,8 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
     exchange_map = {
         #"okx": "USDT",
         #"binanceusdm": "USDT",
-        #"bybit": "USDT",
-        "gateio": "USDT",
+        "bybit": "USDT",
+        # "gateio": "USDT",
         #"bitget": "USDT",
         #"hyperliquid": "USDC",
     }

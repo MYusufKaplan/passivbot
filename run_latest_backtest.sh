@@ -30,8 +30,8 @@ spinner() {
 }
 
 # 🏁 Parameters
-START_DATE="${1:-2023-01-01}"
-END_DATE="${1:-2025-05-01}"
+# START_DATE="${1:-2023-01-01}"
+# END_DATE="${1:-2025-05-01}"
 
 # 📂 Directories
 BASEDIR="/home/myusuf/Projects/passivbot"
@@ -48,7 +48,7 @@ else
 fi
 
 echo -e "${CYAN}🏋️‍♂️  FITNESS ID starting from: ${YELLOW}$FITNESS${NC} ✨"
-echo -e "${CYAN}📅 Start date: ${YELLOW}$START_DATE${NC} 🗓️"
+# echo -e "${CYAN}📅 Start date: ${YELLOW}$START_DATE${NC} 🗓️"
 
 # 📄 Latest optimize result
 latest_optimize_result=$(ls -t "$BASEDIR/optimize_results/" | head -n 1)
@@ -57,7 +57,7 @@ echo -e "${CYAN}📄 Latest optimize result file: ${YELLOW}$latest_optimize_resu
 # ✂️ Trim it
 trimmed_optimize_result="$BASEDIR/optimize_results/finalists.txt"
 first_line=$(head -n 1 "$BASEDIR/optimize_results/$latest_optimize_result")
-tail -n 500000 "$BASEDIR/optimize_results/$latest_optimize_result" > "$trimmed_optimize_result"
+tail -n 2000 "$BASEDIR/optimize_results/$latest_optimize_result" > "$trimmed_optimize_result"
 echo "$first_line" | cat - "$trimmed_optimize_result" > temp && mv temp "$trimmed_optimize_result"
 echo -e "${CYAN}✂️ Trimmed optimize result created: ${YELLOW}$trimmed_optimize_result${NC} ✂️"
 
@@ -83,6 +83,11 @@ for index in "${!analysis_files[@]}"; do
   # # 🛠️ Update end_date
   # jq --arg date "$END_DATE" '.backtest.end_date = $date' "$analysis_json" > "$tmp_json" && mv "$tmp_json" "$analysis_json"
   # echo -e "${CYAN}✅ backtest end_date updated ✅${NC}"
+
+  # 📅 Log start and end dates from config
+  start_date=$(jq -r '.backtest.start_date' "$analysis_json")
+  end_date=$(jq -r '.backtest.end_date' "$analysis_json")
+  echo -e "${CYAN}📅 Start date: ${YELLOW}$start_date${NC} | End date: ${YELLOW}$end_date${NC}"
 
   latest_values=$(jq -r '.analyses.combined | .adg, .adg_w, .mdg, .mdg_w, .gain, .loss_profit_ratio, .loss_profit_ratio_w, .position_held_hours_mean, .positions_held_per_day, .sharpe_ratio, .sharpe_ratio_w' "$analysis_json")
 

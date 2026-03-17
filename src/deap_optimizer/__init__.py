@@ -20,6 +20,7 @@ from .convergence import (
     update_convergence_state,
     get_convergence_log_dict,
 )
+from .optimization_config import OptimizationConfig
 
 __all__ = [
     'DEAPEvolutionaryAlgorithm',
@@ -33,4 +34,5 @@ __all__ = [
     'initialize_convergence_state',
     'update_convergence_state',
     'get_convergence_log_dict',
+    'OptimizationConfig',
 ]

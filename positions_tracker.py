@@ -12,6 +12,44 @@ from rich.style import Style
 from datetime import datetime,timedelta, timezone
 from gate_api import ApiClient, Configuration, FuturesApi
 import subprocess
+import re
+import math
+
+# =============================================================================
+# DEBUGGING NOTE:
+# If closed positions aren't showing, run: python test_gateio_api.py
+# This will test the Gate.io API and show what data is available
+# =============================================================================
+
+STARTING_BALANCE = 0
+
+# =============================================================================
+# CACHING SYSTEM - Reduces API calls by caching slow-changing data
+# =============================================================================
+_cache = {}
+
+def cached_fetch(key, fetch_fn, ttl_seconds):
+    """Generic time-based caching wrapper"""
+    now = time.time()
+    if key in _cache:
+        value, expires = _cache[key]
+        if now < expires:
+            return value
+    try:
+        value = fetch_fn()
+        _cache[key] = (value, now + ttl_seconds)
+        return value
+    except Exception as e:
+        # If fetch fails but we have stale data, return it
+        if key in _cache:
+            return _cache[key][0]
+        raise e
+
+def clear_cache_for_symbol(symbol):
+    """Clear cached data for a specific symbol (call when position closes)"""
+    keys_to_remove = [k for k in _cache if symbol in k]
+    for k in keys_to_remove:
+        _cache.pop(k, None)
 
 def play_sound(path):
     subprocess.run(["aplay", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -115,16 +153,17 @@ def calculate_order_volume_sum(order_book, min_price, max_price, side):
     return total_volume
 
 def fetch_usdt_try_price():
-    exchange = ccxt.binance()
-    symbol = 'USDT/TRY'  # Binance has this pair
-
+    """Fetch USDT/TRY price - cached for 60s (forex doesn't move fast)"""
+    def _fetch():
+        exchange = ccxt.binance()
+        ticker = exchange.fetch_ticker('USDT/TRY')
+        return ticker['last']
+    
     try:
-        ticker = exchange.fetch_ticker(symbol)
-        price = ticker['last']  # Last traded price
-        return price
+        return cached_fetch('usdt_try', _fetch, ttl_seconds=60)
     except Exception as e:
-        print(f"Error fetching {symbol} price: {e}")
-        return None
+        print(f"Error fetching USDT/TRY price: {e}")
+        return 1.0  # Fallback to avoid None errors
 
 def format_duration(seconds):
     hrs = seconds // 3600
@@ -229,38 +268,36 @@ def fetch_position_history_stats(start_date):
     return pnls, all_closed_positions, stats_summary
 
 def get_last_funding_payment(symbol):
-    """Fetch the last funding payment for a symbol"""
-    try:
-        # Use CCXT to fetch funding history
-        # Fetch recent funding history (last few entries)
+    """Fetch the last funding payment for a symbol - cached for 5 min (historical data)"""
+    def _fetch():
         funding_history = gate.fetch_funding_history(symbol, limit=1)
-        
         if funding_history and len(funding_history) > 0:
-            # funding_history returns a list of funding payment records
             last_payment = float(funding_history[0].get('amount', 0))
             payment_color = "green" if last_payment >= 0 else "red"
-            payment_str = f"[{payment_color}]{last_payment:+.5f}[/{payment_color}]"
-            return payment_str
-        else:
-            return "N/A"
-            
+            return f"[{payment_color}]{last_payment:+.5f}[/{payment_color}]"
+        return "N/A"
+    
+    try:
+        return cached_fetch(f'last_funding_{symbol}', _fetch, ttl_seconds=300)
     except Exception as e:
-        # Log the actual error for debugging
         console.log(f"[dim red]Funding history error for {symbol}: {e}[/]")
         return "N/A"
 
 def get_funding_info(symbol, position):
-    """Fetch next funding rate and time remaining until funding"""
+    """Fetch next funding rate and time remaining until funding - rate cached for 60s"""
     try:
-        # Fetch funding rate info
-        funding_rate_info = gate.fetch_funding_rate(symbol)
+        # Cache the funding rate info (doesn't change often)
+        def _fetch_rate():
+            return gate.fetch_funding_rate(symbol)
+        
+        funding_rate_info = cached_fetch(f'funding_rate_{symbol}', _fetch_rate, ttl_seconds=60)
         
         # Get next funding time (in milliseconds)
         next_funding_time = funding_rate_info.get('fundingTimestamp')
         funding_rate = funding_rate_info.get('fundingRate', 0)
         
         if next_funding_time:
-            # Convert to datetime
+            # Convert to datetime - time calculation is always fresh
             next_funding_dt = datetime.fromtimestamp(next_funding_time / 1000)
             now = datetime.now()
             time_remaining = next_funding_dt - now
@@ -276,9 +313,6 @@ def get_funding_info(symbol, position):
                 time_str = f"{hours}h {minutes:02d}m {seconds:02d}s"
             
             # Calculate expected funding payment
-            # Negative funding rate = you receive money (payment is positive)
-            # Positive funding rate = you pay money (payment is negative)
-            # Expected payment = -1 * position_value * funding_rate
             contracts = float(position.get('contracts', 0))
             contract_size = float(position.get('contractSize', 1))
             entry_price = float(position.get('entryPrice', 0))
@@ -286,8 +320,6 @@ def get_funding_info(symbol, position):
             expected_funding = -1 * position_value * funding_rate
             
             # Format funding rate as percentage
-            # Negative funding = you receive money (green, coin bag)
-            # Positive funding = you pay money (red, flying money)
             funding_rate_pct = funding_rate * 100
             if funding_rate < 0:
                 rate_color = "green"
@@ -296,8 +328,6 @@ def get_funding_info(symbol, position):
                 rate_color = "red"
                 emoji = "💸"
             
-            # Add expected funding in parentheses
-            # Expected funding is already flipped, so positive = receive, negative = pay
             expected_color = "green" if expected_funding >= 0 else "red"
             rate_str = f"{emoji} [{rate_color}]{funding_rate_pct:+.4f}%[/{rate_color}] ([{expected_color}]{expected_funding:+.5f}[/{expected_color}])"
             
@@ -309,27 +339,26 @@ def get_funding_info(symbol, position):
         return "Err", "Err"
 
 def get_price_changes(symbol):
-    intervals = [
-        "5m",
-        "15m",
-        "1h",
-        "1d"
-    ]
-    changes = {}
-    for timeframe in intervals:
-        try:
-            ohlcv = gate.fetch_ohlcv(symbol, timeframe=timeframe, limit=2)
-            if len(ohlcv) == 2:
-                prev_close = ohlcv[0][4]
-                last_close = ohlcv[1][4]
-                percent_change = ((last_close - prev_close) / prev_close) * 100
-                direction = "📈" if percent_change >= 0 else "📉"
-                changes[timeframe] = f"{percent_change:.3f}%{direction}"
-            else:
-                changes[timeframe] = "N/A"
-        except Exception as e:
-            changes[timeframe] = "Err"
-    return changes
+    """Get price changes across timeframes - cached for 15s (historical candle data)"""
+    def _fetch():
+        intervals = ["5m", "15m", "1h", "1d"]
+        changes = {}
+        for timeframe in intervals:
+            try:
+                ohlcv = gate.fetch_ohlcv(symbol, timeframe=timeframe, limit=2)
+                if len(ohlcv) == 2:
+                    prev_close = ohlcv[0][4]
+                    last_close = ohlcv[1][4]
+                    percent_change = ((last_close - prev_close) / prev_close) * 100
+                    direction = "📈" if percent_change >= 0 else "📉"
+                    changes[timeframe] = f"{percent_change:.3f}%{direction}"
+                else:
+                    changes[timeframe] = "N/A"
+            except Exception as e:
+                changes[timeframe] = "Err"
+        return changes
+    
+    return cached_fetch(f'price_changes_{symbol}', _fetch, ttl_seconds=15)
 
 def create_sparkline(prices, width=30, execution_data=None):
     """Create a simple ASCII sparkline from price data using bar characters with execution highlighting"""
@@ -370,7 +399,6 @@ def create_sparkline(prices, width=30, execution_data=None):
         # Strip color tags for padding
         if "[" in last_char and "]" in last_char:
             # Extract just the character without color tags
-            import re
             clean_char = re.sub(r'\[.*?\]', '', last_char)
             normalized.extend([clean_char] * (width - len(normalized)))
         else:
@@ -380,24 +408,27 @@ def create_sparkline(prices, width=30, execution_data=None):
     return chart, min_price, max_price
 
 def get_sparkline_data(symbol, timeframe="15m", limit=30):
-    """Fetch recent price data for sparkline with timestamps"""
-    try:
+    """Fetch recent price data for sparkline - cached for 30s (15m candles don't change fast)"""
+    def _fetch():
         ohlcv = gate.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         if ohlcv:
-            # Return both prices and timestamps
             prices = [candle[4] for candle in ohlcv]
             timestamps = [candle[0] for candle in ohlcv]
             return prices, timestamps
         return [], []
+    
+    try:
+        return cached_fetch(f'sparkline_{symbol}_{timeframe}', _fetch, ttl_seconds=30)
     except Exception as e:
         return [], []
 
 def fetch_recent_trades(symbol, limit=100):
-    """Fetch recent trade history from Gate.io"""
+    """Fetch recent trade history - cached for 30s (historical data)"""
+    def _fetch():
+        return gate.fetch_my_trades(symbol, limit=limit)
+    
     try:
-        # Fetch recent trades for this symbol
-        trades = gate.fetch_my_trades(symbol, limit=limit)
-        return trades
+        return cached_fetch(f'recent_trades_{symbol}', _fetch, ttl_seconds=30)
     except Exception as e:
         console.log(f"[red]❌ Failed fetching trades for {symbol}[/]: {e}")
         return []
@@ -607,65 +638,74 @@ def build_position_panel(visual_symbol, symbol, position, current_price, orders,
 
     return position_panel
 
-def get_bot_account_equity():
-    """Fetch the bot trading account balance (quant account) from Gate.io API"""
-    try:
-        # Use privateWalletGetTotalBalance to get all account balances
-        total_balance = gate.privateWalletGetTotalBalance()
-        
-        # Extract quant (bot trading) account balance
-        if 'details' in total_balance and 'quant' in total_balance['details']:
-            quant_balance = total_balance['details']['quant']
-            if quant_balance.get('currency') == 'USDT':
-                return float(quant_balance.get('amount', 0))
-        
-        return 0.0
-    except Exception as e:
-        console.log(f"[dim red]Could not fetch bot account equity: {e}[/]")
-        return 0.0
+def fetch_unified_account_equity():
+    """Fetch total equity from Gate.io unified account - cached for 5s"""
+    def _fetch():
+        try:
+            configuration = Configuration(key=API_KEY, secret=API_SECRET)
+            client = ApiClient(configuration)
+            
+            from gate_api import UnifiedApi
+            unified_api = UnifiedApi(client)
+            
+            account = unified_api.list_unified_accounts()
+            
+            # Try unified_account_total_equity first
+            if hasattr(account, 'unified_account_total_equity'):
+                return float(account.unified_account_total_equity)
+            elif hasattr(account, 'total_equity'):
+                return float(account.total_equity)
+            
+            # Fallback to USDT balance equity
+            if hasattr(account, 'balances') and 'USDT' in account.balances:
+                usdt_balance = account.balances['USDT']
+                if isinstance(usdt_balance, dict):
+                    return float(usdt_balance.get('equity', 0))
+            
+            return None
+        except Exception as e:
+            with open('tracker_errors.log', 'a') as f:
+                f.write(f"{datetime.now()}: Unified account fetch error: {e}\n")
+            return None
+    
+    return cached_fetch('unified_equity', _fetch, ttl_seconds=5)
 
 def build_account_metrics_panel(balance, all_positions):
     try_price = fetch_usdt_try_price()
     
-    # Handle Gate.io unified/swap account balance structure
-    balance_usdt = 0.0
-    free_usdt = 0.0
-    used_usdt = 0.0
-    debt_usdt = 0.0
+    # Try to get equity from unified account first (includes borrowed funds calculation)
+    equity_usdt = fetch_unified_account_equity()
     
-    # Check if we have the info array structure (Gate.io unified/swap accounts)
-    if 'info' in balance and isinstance(balance['info'], list):
-        for item in balance['info']:
-            if item.get('currency') == 'USDT':
-                # For Gate.io, available is the free balance
-                free_usdt = float(item.get('available', 0))
-                # Position margin + order margin = used balance
-                position_margin = float(item.get('position_margin', 0))
-                order_margin = float(item.get('order_margin', 0))
-                position_initial_margin = float(item.get('position_initial_margin', 0))
-                used_usdt = position_margin + order_margin + position_initial_margin
-                # Total = available + used
-                balance_usdt = free_usdt + used_usdt
-                break
-    else:
-        # Fallback to standard CCXT structure
-        if 'USDT' in balance.get('total', {}):
-            balance_usdt = balance['total']['USDT']
-            free_usdt = balance['free']['USDT'] 
-            used_usdt = balance['used']['USDT']
-            debt_usdt = balance['debt']['USDT']
+    if equity_usdt is None:
+        # Fallback: calculate from futures balance
+        balance_usdt = 0.0
+        debt_usdt = 0.0
+        
+        # Check if we have the info array structure (Gate.io unified/swap accounts)
+        if 'info' in balance and isinstance(balance['info'], list):
+            for item in balance['info']:
+                if item.get('currency') == 'USDT':
+                    free_usdt = float(item.get('available', 0))
+                    order_margin = float(item.get('order_margin', 0))
+                    position_initial_margin = float(item.get('position_initial_margin', 0))
+                    balance_usdt = free_usdt + order_margin + position_initial_margin
+                    break
+        else:
+            # Fallback to standard CCXT structure
+            if 'USDT' in balance.get('total', {}):
+                balance_usdt = balance['total']['USDT']
+                debt_usdt = balance.get('debt', {}).get('USDT', 0)
+        
+        # Calculate total unrealized PnL from all active positions
+        total_unrealized_pnl = 0.0
+        if all_positions:
+            for pos in all_positions:
+                total_unrealized_pnl += float(pos['unrealizedPnl'])
+        
+        equity_usdt = balance_usdt - debt_usdt + total_unrealized_pnl
     
-    # Calculate total unrealized PnL from all active positions
-    total_unrealized_pnl = 0.0
-    if all_positions:
-        for pos in all_positions:
-            total_unrealized_pnl += float(pos['unrealizedPnl'])
-    
-    # Get bot's account equity and add to total
-    bot_equity_usdt = get_bot_account_equity()
-    equity_usdt = (balance_usdt - debt_usdt + total_unrealized_pnl + bot_equity_usdt) 
     equity_try = equity_usdt * try_price
-    profit_try = equity_try - 209000
+    profit_try = equity_try - STARTING_BALANCE
 
     # Create a wider grid layout for better spread
     balance_table = Table.grid(padding=(0, 2))
@@ -674,15 +714,9 @@ def build_account_metrics_panel(balance, all_positions):
     balance_table.add_column(justify="left")
     
     balance_table.add_row(
-        f"[bold]💰 Total Equity:[/] {equity_usdt:.2f} USDT (Bot: {bot_equity_usdt:.2f})",
+        f"[bold]💰 Total Equity:[/] {equity_usdt:.2f} USDT",
         f"[bold]💰 Equity TRY:[/] {equity_try:.2f}₺ (Profit: {profit_try:+.2f}₺)"
     )
-    
-    # balance_table.add_row(
-    #     f"[bold]💰 Equity TRY:[/] {equity_try:.2f}₺ (Profit: {profit_try:+.2f}₺)",
-    #     "",  # Empty middle column for this row
-    #     ""   # Empty right column for this row
-    # )
 
     # Add liquidation info if available from any position
     if all_positions:
@@ -708,6 +742,267 @@ def build_account_metrics_panel(balance, all_positions):
 
     return Panel(balance_table, title="💼 Account Metrics", expand=True)
 
+def fetch_recent_closed_positions(limit=48):
+    """Fetch recent closed positions - cached for 30s"""
+    def _fetch():
+        try:
+            # Use CCXT's private API method directly
+            response = gate.private_futures_get_settle_position_close({
+                'settle': 'usdt',
+                'limit': limit
+            })
+            
+            # Sort by close time descending (most recent first)
+            sorted_positions = sorted(response, key=lambda x: x.get('time', 0), reverse=True)
+            return sorted_positions[:limit]
+            
+        except Exception as e:
+            with open('tracker_errors.log', 'a') as f:
+                f.write(f"{datetime.now()}: Closed positions fetch error: {e}\n")
+            return []
+    
+    return cached_fetch('recent_closed_positions', _fetch, ttl_seconds=30)
+
+def build_position_history_panel():
+    """Build a compact grid showing recent closed positions (8 rows x 6 columns = 48 positions)"""
+    closed_positions = fetch_recent_closed_positions(48)
+    
+    if not closed_positions:
+        return Panel("No recent closed positions", title="📜 Recent History", expand=True)
+    
+    # Find min and max PnL for gradient coloring
+    pnls = [float(pos.get('pnl', 0)) for pos in closed_positions]
+    min_pnl = min(pnls) if pnls else 0
+    max_pnl = max(pnls) if pnls else 0
+    pnl_range = max_pnl - min_pnl if max_pnl != min_pnl else 1
+    
+    # Find min and max PnL/s for independent gradient coloring
+    pnl_per_secs = []
+    for pos in closed_positions:
+        pnl = float(pos.get('pnl', 0))
+        close_time = int(pos.get('time', 0))
+        open_time = int(pos.get('first_open_time', close_time))
+        dur = max(close_time - open_time, 1)
+        pnl_per_secs.append(pnl / dur)
+    min_pps = min(pnl_per_secs) if pnl_per_secs else 0
+    max_pps = max(pnl_per_secs) if pnl_per_secs else 0
+    pps_range = max_pps - min_pps if max_pps != min_pps else 1
+    
+    # Create a grid with 6 columns
+    history_table = Table.grid(padding=(0, 1), expand=True)
+    for _ in range(6):
+        history_table.add_column()
+    
+    # Prepare all cells first
+    cells = []
+    for pos in closed_positions:
+        symbol = pos.get('contract', '').replace('_USDT', '').replace('_', '')
+        pnl = float(pos.get('pnl', 0))
+        close_time = int(pos.get('time', 0))
+        open_time = int(pos.get('first_open_time', close_time))
+        
+        # Calculate position duration with detailed time
+        duration_seconds = close_time - open_time
+        if duration_seconds == 0:
+            duration_seconds = 1  # Avoid division by zero
+            
+        hours = duration_seconds // 3600
+        minutes = (duration_seconds % 3600) // 60
+        seconds = duration_seconds % 60
+        
+        if hours > 0:
+            duration = f"{hours}h{minutes}m{seconds}s"
+        elif minutes > 0:
+            duration = f"{minutes}m{seconds}s"
+        else:
+            duration = f"{seconds}s"
+        
+        # Calculate time ago (when it closed) with detailed time
+        now = datetime.now().timestamp()
+        time_diff = int(now - close_time)
+        ago_hours = time_diff // 3600
+        ago_minutes = (time_diff % 3600) // 60
+        ago_seconds = time_diff % 60
+        
+        if ago_hours > 0:
+            time_ago = f"{ago_hours}h{ago_minutes}m{ago_seconds}s"
+        elif ago_minutes > 0:
+            time_ago = f"{ago_minutes}m{ago_seconds}s"
+        else:
+            time_ago = f"{ago_seconds}s"
+        
+        # Calculate PnL per second
+        pnl_per_sec = pnl / duration_seconds
+        
+        # Calculate gradient color for PnL: yellow (worst) to green (best)
+        normalized_pnl = (pnl - min_pnl) / pnl_range if pnl_range > 0 else 0.5
+        red = int(255 * (1 - normalized_pnl))
+        green = 255
+        blue = 0
+        pnl_color = f"#{red:02x}{green:02x}{blue:02x}"
+        
+        # Calculate gradient color for PnL/s: white (worst) to light blue (best)
+        # Use logarithmic scale for better distribution
+        # White RGB: (255, 255, 255) -> Light Blue RGB: (100, 180, 255)
+        
+        # Shift values to be positive for log scale
+        shifted_pps = pnl_per_sec - min_pps + 1e-10  # Add small epsilon to avoid log(0)
+        shifted_max = max_pps - min_pps + 1e-10
+        
+        # Apply log scale
+        if shifted_max > 0 and shifted_pps > 0:
+            log_normalized = math.log(shifted_pps) / math.log(shifted_max)
+            log_normalized = max(0, min(1, log_normalized))  # Clamp to [0, 1]
+        else:
+            log_normalized = 0.5
+        
+        pps_red = int(255 - 155 * log_normalized)  # 255 to 100
+        pps_green = int(255 - 75 * log_normalized)  # 255 to 180
+        pps_blue = 255  # stays 255
+        pps_color = f"#{pps_red:02x}{pps_green:02x}{pps_blue:02x}"
+        
+        # Format: SYMBOL +/-PNL +/-PNL/S [DURATION] TIME_AGO
+        cell = f"[dim]{symbol}[/] [{pnl_color}]{pnl:+.2f}[/{pnl_color}] [{pps_color}]{pnl_per_sec:+.1e}/s[/{pps_color}] [dim]\\[{duration}] {time_ago}[/]"
+        cells.append(cell)
+    
+    # Pad cells to fill the grid
+    while len(cells) < 48:
+        cells.append("")
+    
+    # Rearrange: top-to-bottom, then left-to-right (column-major order)
+    # We have 8 rows x 6 columns
+    num_rows = 8
+    num_cols = 6
+    
+    for row_idx in range(num_rows):
+        row = []
+        for col_idx in range(num_cols):
+            # Column-major indexing: position = col * num_rows + row
+            cell_idx = col_idx * num_rows + row_idx
+            if cell_idx < len(cells):
+                row.append(cells[cell_idx])
+            else:
+                row.append("")
+        history_table.add_row(*row)
+    
+    return Panel(history_table, title="📜 Recent History (Last 48 Closed)", expand=True)
+
+def build_large_position_history_panel(closed_positions):
+    """Build a large grid showing closed positions (50 rows x 6 columns = 300 positions)"""
+    
+    if not closed_positions:
+        return Panel("No recent closed positions", title="📜 Recent History", expand=True)
+    
+    # Find min and max PnL for gradient coloring
+    pnls = [float(pos.get('pnl', 0)) for pos in closed_positions]
+    min_pnl = min(pnls) if pnls else 0
+    max_pnl = max(pnls) if pnls else 0
+    pnl_range = max_pnl - min_pnl if max_pnl != min_pnl else 1
+    
+    # Find min and max PnL/s for independent gradient coloring
+    pnl_per_secs = []
+    for pos in closed_positions:
+        pnl = float(pos.get('pnl', 0))
+        close_time = int(pos.get('time', 0))
+        open_time = int(pos.get('first_open_time', close_time))
+        dur = max(close_time - open_time, 1)
+        pnl_per_secs.append(pnl / dur)
+    min_pps = min(pnl_per_secs) if pnl_per_secs else 0
+    max_pps = max(pnl_per_secs) if pnl_per_secs else 0
+    pps_range = max_pps - min_pps if max_pps != min_pps else 1
+    
+    # Create a grid with 6 columns
+    history_table = Table.grid(padding=(0, 1), expand=True)
+    for _ in range(6):
+        history_table.add_column()
+    
+    # Prepare all cells first
+    cells = []
+    for pos in closed_positions:
+        symbol = pos.get('contract', '').replace('_USDT', '').replace('_', '')
+        pnl = float(pos.get('pnl', 0))
+        close_time = int(pos.get('time', 0))
+        open_time = int(pos.get('first_open_time', close_time))
+        
+        # Calculate position duration with detailed time
+        duration_seconds = close_time - open_time
+        if duration_seconds == 0:
+            duration_seconds = 1
+            
+        hours = duration_seconds // 3600
+        minutes = (duration_seconds % 3600) // 60
+        seconds = duration_seconds % 60
+        
+        if hours > 0:
+            duration = f"{hours}h{minutes}m{seconds}s"
+        elif minutes > 0:
+            duration = f"{minutes}m{seconds}s"
+        else:
+            duration = f"{seconds}s"
+        
+        # Calculate time ago
+        now = datetime.now().timestamp()
+        time_diff = int(now - close_time)
+        ago_hours = time_diff // 3600
+        ago_minutes = (time_diff % 3600) // 60
+        ago_seconds = time_diff % 60
+        
+        if ago_hours > 0:
+            time_ago = f"{ago_hours}h{ago_minutes}m{ago_seconds}s"
+        elif ago_minutes > 0:
+            time_ago = f"{ago_minutes}m{ago_seconds}s"
+        else:
+            time_ago = f"{ago_seconds}s"
+        
+        # Calculate PnL per second
+        pnl_per_sec = pnl / duration_seconds
+        
+        # Calculate gradient color for PnL: yellow (worst) to green (best)
+        normalized_pnl = (pnl - min_pnl) / pnl_range if pnl_range > 0 else 0.5
+        red = int(255 * (1 - normalized_pnl))
+        green = 255
+        blue = 0
+        pnl_color = f"#{red:02x}{green:02x}{blue:02x}"
+        
+        # Calculate gradient color for PnL/s with logarithmic scale
+        shifted_pps = pnl_per_sec - min_pps + 1e-10
+        shifted_max = max_pps - min_pps + 1e-10
+        
+        if shifted_max > 0 and shifted_pps > 0:
+            log_normalized = math.log(shifted_pps) / math.log(shifted_max)
+            log_normalized = max(0, min(1, log_normalized))
+        else:
+            log_normalized = 0.5
+        
+        pps_red = int(255 - 155 * log_normalized)
+        pps_green = int(255 - 75 * log_normalized)
+        pps_blue = 255
+        pps_color = f"#{pps_red:02x}{pps_green:02x}{pps_blue:02x}"
+        
+        # Format: SYMBOL +/-PNL +/-PNL/S [DURATION] TIME_AGO
+        cell = f"[dim]{symbol}[/] [{pnl_color}]{pnl:+.2f}[/{pnl_color}] [{pps_color}]{pnl_per_sec:+.1e}/s[/{pps_color}] [dim]\\[{duration}] {time_ago}[/]"
+        cells.append(cell)
+    
+    # Pad cells to fill the grid
+    while len(cells) < 300:
+        cells.append("")
+    
+    # Rearrange: top-to-bottom, then left-to-right (column-major order)
+    num_rows = 50
+    num_cols = 6
+    
+    for row_idx in range(num_rows):
+        row = []
+        for col_idx in range(num_cols):
+            cell_idx = col_idx * num_rows + row_idx
+            if cell_idx < len(cells):
+                row.append(cells[cell_idx])
+            else:
+                row.append("")
+        history_table.add_row(*row)
+    
+    return Panel(history_table, title="📜 Extended History (Last 100 Closed)", expand=True)
+
 def main():
     idle_time = 0
     first_run = True
@@ -727,8 +1022,38 @@ def main():
                     idle_time += 1
                     idle_seconds = idle_time * 5
                     formatted_time = format_duration(idle_seconds)
-                    panel = Panel(f"[yellow]No open positions. Waiting... {formatted_time}", title="📭 Idle", border_style="dim")
-                    live.update(panel)
+                    
+                    # Show expanded history when idle
+                    balance = fetch_balance_unified()
+                    account_panel = build_account_metrics_panel(balance, [])
+                    
+                    # Fetch 100 positions for 50x6 grid (300 total)
+                    def fetch_large_history():
+                        try:
+                            response = gate.private_futures_get_settle_position_close({
+                                'settle': 'usdt',
+                                'limit': 100
+                            })
+                            sorted_positions = sorted(response, key=lambda x: x.get('time', 0), reverse=True)
+                            return sorted_positions[:100]
+                        except:
+                            return []
+                    
+                    large_history = fetch_large_history()
+                    
+                    # Build large history panel (100 rows x 6 columns)
+                    if large_history:
+                        history_panel = build_large_position_history_panel(large_history)
+                    else:
+                        history_panel = Panel(f"[yellow]No open positions. Waiting... {formatted_time}", title="📭 Idle", border_style="dim")
+                    
+                    # Create header
+                    header = Table.grid(expand=True)
+                    header.add_column(justify="center")
+                    header.add_row(f"[dim]{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/]")
+                    
+                    layout = Group(header, account_panel, history_panel)
+                    live.update(layout)
                     time.sleep(5)
                     continue
 
@@ -749,6 +1074,7 @@ def main():
                         previous_positions.pop(sym, None)
                         previous_orders.pop(sym, None)
                         sell_suppress_until.pop(sym, None)
+                        clear_cache_for_symbol(sym)  # Clear cached data for closed position
 
                 # Process all active positions for order-based sounds
                 for pos in positions:
@@ -806,6 +1132,9 @@ def main():
                 # Build account metrics panel
                 account_panel = build_account_metrics_panel(balance, positions)
 
+                # Build position history panel
+                history_panel = build_position_history_panel()
+
                 # Create header with timestamp
                 header = Table.grid(expand=True)
                 header.add_column(justify="center")
@@ -815,6 +1144,7 @@ def main():
                 layout_components = [header]
                 layout_components.extend(position_panels)
                 layout_components.append(account_panel)
+                layout_components.append(history_panel)
                 
                 layout = Group(*layout_components)
 

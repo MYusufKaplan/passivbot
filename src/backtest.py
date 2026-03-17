@@ -276,9 +276,16 @@ async def prepare_hlcvs_mss(config, exchange):
             start_ts = date_to_ts(config["backtest"]["start_date"])
             end_ts = date_to_ts(format_end_date(config["backtest"]["end_date"]))
             timestamps = np.arange(start_ts, end_ts + 60000, 60000, dtype=np.int64)
-            # Ensure timestamps match hlcvs shape
-            if len(timestamps) != hlcvs.shape[0]:
-                timestamps = timestamps[:hlcvs.shape[0]]
+            # Validate cache has correct length for date range
+            expected_length = len(timestamps)
+            actual_length = hlcvs.shape[0]
+            if expected_length != actual_length:
+                logging.warning(
+                    f"Cache length mismatch: expected {expected_length} minutes "
+                    f"({config['backtest']['start_date']} to {config['backtest']['end_date']}), "
+                    f"but cache has {actual_length}. Invalidating cache and refetching..."
+                )
+                raise ValueError("Cache date range mismatch")
             return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")

@@ -10,6 +10,12 @@ mod python;
 mod types;
 mod utils;
 
+#[cfg(test)]
+mod dirty_flag_tests;
+
+#[cfg(test)]
+mod rolling_volume_tests;
+
 use backtest::*;
 use closes::*;
 use entries::*;
