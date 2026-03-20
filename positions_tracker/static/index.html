@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Positions Tracker</title>
+    <link rel="preconnect" href="https://unpkg.com">
+    <link rel="stylesheet" href="/static/style.css">
+    <script defer src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+
+    <!-- Header -->
+    <header id="header">
+        <h1>Positions Tracker</h1>
+        <span id="last-updated">Last updated: —</span>
+    </header>
+
+    <!-- Connection lost indicator (hidden by default) -->
+    <div id="connection-lost" class="connection-lost" style="display: none;">
+        ⚠ Connection lost — retrying…
+    </div>
+
+    <!-- Loading indicator (shown until first data arrives) -->
+    <div id="loading-indicator" class="loading-indicator">
+        Loading dashboard…
+    </div>
+
+    <!-- Summary bar -->
+    <section id="summary-bar" style="display: none;">
+        <div class="summary-equity">
+            <span class="summary-label">Profit</span>
+            <span class="summary-value" data-field="summary-profit-try"></span>
+        </div>
+        <div class="summary-positions" id="summary-positions">
+            <!-- Filled by JS: symbol + unrealized PnL per position -->
+        </div>
+        <div class="summary-rates">
+            <div class="summary-rate-item">
+                <span class="summary-rate-label">24h</span>
+                <span class="summary-rate-value" data-field="summary-cps-24h"></span>
+                <span class="summary-rate-daily" data-field="summary-dr-24h"></span>
+            </div>
+            <div class="summary-rate-item">
+                <span class="summary-rate-label">7d</span>
+                <span class="summary-rate-value" data-field="summary-cps-7d"></span>
+                <span class="summary-rate-daily" data-field="summary-dr-7d"></span>
+            </div>
+            <div class="summary-rate-item">
+                <span class="summary-rate-label">30d</span>
+                <span class="summary-rate-value" data-field="summary-cps-30d"></span>
+                <span class="summary-rate-daily" data-field="summary-dr-30d"></span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Positions container (up to 3 cards) -->
+    <section id="positions-container" style="display: none;">
+        <!-- Position cards are dynamically created by app.js using the template below -->
+    </section>
+
+    <!-- Position card template (hidden, cloned by JS) -->
+    <template id="position-card-template">
+        <article class="position-card" data-symbol="">
+            <!-- Symbol header -->
+            <div class="position-header">
+                <span class="symbol-name"></span>
+                <span class="contracts"></span>
+                <span class="current-price"></span>
+            </div>
+
+            <!-- Price change badges -->
+            <div class="price-changes">
+                <span class="badge" data-timeframe="5m"></span>
+                <span class="badge" data-timeframe="15m"></span>
+                <span class="badge" data-timeframe="1h"></span>
+                <span class="badge" data-timeframe="1d"></span>
+            </div>
+
+            <!-- Timeframe selector -->
+            <div class="timeframe-selector">
+                <button class="tf-btn" data-tf="1m">1m</button>
+                <button class="tf-btn" data-tf="5m">5m</button>
+                <button class="tf-btn active" data-tf="15m">15m</button>
+                <button class="tf-btn" data-tf="1h">1h</button>
+            </div>
+
+            <!-- Chart container (TradingView Lightweight Charts) -->
+            <div class="chart-container" data-chart=""></div>
+
+            <!-- PnL section -->
+            <div class="pnl-section">
+                <div class="pnl-row">
+                    <span class="pnl-label">Unrealized PnL</span>
+                    <span class="unrealized-pnl-usdt" data-field="unrealized-pnl-usdt"></span>
+                    <span class="unrealized-pnl-try" data-field="unrealized-pnl-try"></span>
+                </div>
+                <div class="pnl-row">
+                    <span class="pnl-label">Realized PnL</span>
+                    <span class="realized-pnl-usdt" data-field="realized-pnl-usdt"></span>
+                    <span class="realized-pnl-try" data-field="realized-pnl-try"></span>
+                </div>
+            </div>
+
+            <!-- Entry / Break-even prices -->
+            <div class="price-info">
+                <div class="price-row">
+                    <span class="price-label">Entry Price</span>
+                    <span class="entry-price" data-field="entry-price"></span>
+                </div>
+                <div class="price-row">
+                    <span class="price-label">Break-even</span>
+                    <span class="break-even-price" data-field="break-even-price"></span>
+                </div>
+            </div>
+
+            <!-- Orders / progress bars -->
+            <div class="orders-container" data-field="orders">
+                <!-- Order progress bars are dynamically populated by JS -->
+            </div>
+
+            <!-- Funding info -->
+            <div class="funding-section">
+                <div class="funding-row">
+                    <span class="funding-label">Funding Rate</span>
+                    <span class="funding-rate" data-field="funding-rate"></span>
+                </div>
+                <div class="funding-row">
+                    <span class="funding-label">Expected Payment</span>
+                    <span class="funding-payment" data-field="funding-payment"></span>
+                </div>
+                <div class="funding-row">
+                    <span class="funding-label">Next Funding</span>
+                    <span class="funding-countdown" data-field="funding-countdown" data-next-funding-ts=""></span>
+                </div>
+                <div class="funding-row">
+                    <span class="funding-label">Last Payment</span>
+                    <span class="last-funding-payment" data-field="last-funding-payment"></span>
+                </div>
+            </div>
+
+            <!-- Trade duration timer -->
+            <div class="duration-section">
+                <span class="duration-label">Trade Duration</span>
+                <span class="trade-duration" data-field="trade-duration" data-open-ts=""></span>
+            </div>
+
+            <!-- Liquidation / leverage / margin -->
+            <div class="risk-indicators">
+                <span class="leverage" data-field="leverage"></span>
+                <span class="liquidation-price" data-field="liquidation-price"></span>
+                <span class="margin-ratio" data-field="margin-ratio"></span>
+            </div>
+        </article>
+    </template>
+
+    <!-- Account metrics panel -->
+    <section id="account-panel" style="display: none;">
+        <!-- Equity headline -->
+        <div class="equity-headline">
+            <div class="equity-usdt">
+                <span class="equity-label">Equity</span>
+                <span class="equity-value" data-field="equity-usdt"></span>
+                <span class="equity-unit">USDT</span>
+            </div>
+            <div class="equity-try">
+                <span class="equity-value" data-field="equity-try"></span>
+                <span class="equity-unit">TRY</span>
+            </div>
+        </div>
+
+        <!-- Profit from starting balance -->
+        <div class="profit-section">
+            <span class="profit-label">Profit from 150,000 TRY</span>
+            <span class="profit-value" data-field="profit-try"></span>
+        </div>
+
+        <!-- PnL rate stat cards (24h / 7d / 30d) -->
+        <div class="rate-stats">
+            <div class="stat-card" data-window="24h">
+                <span class="stat-window">24h</span>
+                <span class="stat-rate" data-field="rate-24h"></span>
+                <span class="stat-total" data-field="total-pnl-24h"></span>
+                <span class="stat-count" data-field="count-24h"></span>
+            </div>
+            <div class="stat-card" data-window="7d">
+                <span class="stat-window">7d</span>
+                <span class="stat-rate" data-field="rate-7d"></span>
+                <span class="stat-total" data-field="total-pnl-7d"></span>
+                <span class="stat-count" data-field="count-7d"></span>
+            </div>
+            <div class="stat-card" data-window="30d">
+                <span class="stat-window">30d</span>
+                <span class="stat-rate" data-field="rate-30d"></span>
+                <span class="stat-total" data-field="total-pnl-30d"></span>
+                <span class="stat-count" data-field="count-30d"></span>
+            </div>
+        </div>
+
+        <!-- Projection table -->
+        <div class="projections-section">
+            <table class="projection-table" id="projection-table">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>1-Day</th>
+                        <th>7-Day</th>
+                        <th>30-Day</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr data-row="daily-rate">
+                        <td>Daily Rate</td>
+                        <td data-field="proj-daily-rate-24h"></td>
+                        <td data-field="proj-daily-rate-7d"></td>
+                        <td data-field="proj-daily-rate-30d"></td>
+                    </tr>
+                    <tr data-row="1d">
+                        <td>1 Day</td>
+                        <td data-field="proj-1d-24h"></td>
+                        <td data-field="proj-1d-7d"></td>
+                        <td data-field="proj-1d-30d"></td>
+                    </tr>
+                    <tr data-row="1w">
+                        <td>1 Week</td>
+                        <td data-field="proj-1w-24h"></td>
+                        <td data-field="proj-1w-7d"></td>
+                        <td data-field="proj-1w-30d"></td>
+                    </tr>
+                    <tr data-row="1m">
+                        <td>1 Month</td>
+                        <td data-field="proj-1m-24h"></td>
+                        <td data-field="proj-1m-7d"></td>
+                        <td data-field="proj-1m-30d"></td>
+                    </tr>
+                    <tr data-row="2x">
+                        <td>2× Equity</td>
+                        <td data-field="proj-2x-24h"></td>
+                        <td data-field="proj-2x-7d"></td>
+                        <td data-field="proj-2x-30d"></td>
+                    </tr>
+                    <tr data-row="5x">
+                        <td>5× Equity</td>
+                        <td data-field="proj-5x-24h"></td>
+                        <td data-field="proj-5x-7d"></td>
+                        <td data-field="proj-5x-30d"></td>
+                    </tr>
+                    <tr data-row="10x">
+                        <td>10× Equity</td>
+                        <td data-field="proj-10x-24h"></td>
+                        <td data-field="proj-10x-7d"></td>
+                        <td data-field="proj-10x-30d"></td>
+                    </tr>
+                    <tr data-row="custom-target">
+                        <td><input type="number" id="custom-target-input" placeholder="Target Profit TRY" class="custom-target-input"></td>
+                        <td data-field="proj-custom-24h">—</td>
+                        <td data-field="proj-custom-7d">—</td>
+                        <td data-field="proj-custom-30d">—</td>
+                    </tr>
+                    <tr data-row="custom-income">
+                        <td class="income-input-cell">
+                            <input type="number" id="custom-income-input" placeholder="TRY income" class="custom-target-input">
+                            <select id="custom-income-period" class="custom-period-select">
+                                <option value="day">/day</option>
+                                <option value="week">/week</option>
+                                <option value="month">/month</option>
+                            </select>
+                        </td>
+                        <td data-field="proj-income-24h">—</td>
+                        <td data-field="proj-income-7d">—</td>
+                        <td data-field="proj-income-30d">—</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- History table panel -->
+    <section id="history-panel" style="display: none;">
+        <h2>Closed Positions</h2>
+        <table class="history-table" id="history-table">
+            <thead>
+                <tr>
+                    <th data-sort="symbol" class="sortable">Symbol <span class="sort-indicator"></span></th>
+                    <th data-sort="pnl" class="sortable">PnL <span class="sort-indicator"></span></th>
+                    <th data-sort="pnl_per_sec" class="sortable">PnL/s <span class="sort-indicator"></span></th>
+                    <th data-sort="duration_seconds" class="sortable">Duration <span class="sort-indicator"></span></th>
+                    <th data-sort="close_timestamp" class="sortable">Time Ago <span class="sort-indicator"></span></th>
+                </tr>
+            </thead>
+            <tbody id="history-tbody">
+                <!-- Rows populated dynamically by app.js -->
+            </tbody>
+        </table>
+    </section>
+
+    <!-- Idle state display (shown when no active positions) -->
+    <section id="idle-state" style="display: none;">
+        <div class="idle-content">
+            <div class="idle-timer" data-field="idle-timer"></div>
+            <div class="idle-message">Waiting for positions…</div>
+        </div>
+    </section>
+
+    <!-- App logic -->
+    <script defer src="/static/app.js"></script>
+</body>
+</html>

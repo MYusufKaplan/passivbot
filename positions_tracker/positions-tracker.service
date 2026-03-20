@@ -1,0 +1,15 @@
+[Unit]
+Description=Positions Tracker Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=myusuf
+WorkingDirectory=/home/myusuf/Projects/passivbot
+ExecStart=/home/myusuf/Projects/passivbot/.venv/bin/python /home/myusuf/Projects/passivbot/positions_tracker/app.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
